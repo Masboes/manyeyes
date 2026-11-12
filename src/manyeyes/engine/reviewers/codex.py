@@ -13,8 +13,12 @@ from pathlib import Path
 from ..models import Usage
 from .base import Parsed, Reviewer
 
-# Seen when Codex 0.167+ runs with CODEX_HOME under /tmp: every command fails.
-SANDBOX_BROKEN = "execvp codex-linux-sandbox"
+# How a command fails when Codex's own sandbox cannot start, for example
+# "bwrap: execvp codex-linux-sandbox: No such file or directory" (Codex 0.167+ does not
+# create that helper when its home is under /tmp) or "bwrap: No permissions to create
+# new namespace".
+SANDBOX_BROKEN = "bwrap: "
+
 
 class CodexReviewer(Reviewer):
     kind = "codex"
@@ -63,6 +67,7 @@ class CodexReviewer(Reviewer):
     def parse(self, stdout: str, stderr: str) -> Parsed:
         out = Parsed()
         errors: list[str] = []
+        cmd_ok, blind_output = 0, ""
         for line in stdout.splitlines():
             line = line.strip()
             if not line.startswith("{"):
@@ -73,6 +78,12 @@ class CodexReviewer(Reviewer):
                 continue
             etype = ev.get("type", "")
             item = ev.get("item") or {}
+            if etype == "item.completed" and item.get("type") == "command_execution":
+                output = str(item.get("aggregated_output") or "").lstrip()
+                if item.get("exit_code") == 0:
+                    cmd_ok += 1
+                elif output.startswith(SANDBOX_BROKEN):
+                    blind_output = blind_output or output.splitlines()[0][:200]
             if item.get("type") == "agent_message" or etype == "agent_message":
                 text = item.get("text") or ev.get("text")
                 if text:
@@ -90,12 +101,13 @@ class CodexReviewer(Reviewer):
                 msg = (err.get("message") if isinstance(err, dict) else None) \
                     or ev.get("message") or json.dumps(ev)[:500]
                 errors.append(str(msg))
-        if SANDBOX_BROKEN in stdout or SANDBOX_BROKEN in stderr:
-            # Codex could not run a single command, so it never saw the code; its
-            # "review" only says so. Never count that as a review.
+        if blind_output and not cmd_ok:
+            # Not one command ran, so Codex never saw the code; its "review" only
+            # says so. Never count that as a review.
             out.review = ""
-            errors.insert(0, "codex could not run commands: its sandbox helper "
-                             "(codex-linux-sandbox) is missing. Codex refuses to create it "
-                             "when its home is under /tmp: keep data_dir outside /tmp.")
+            hint = (" Its home is probably under /tmp: keep data_dir outside /tmp."
+                    if "codex-linux-sandbox" in blind_output else "")
+            errors.insert(0, f"codex could not run any command, its sandbox failed: "
+                             f"{blind_output}.{hint}")
         out.error_text = "\n".join(errors)
         return out
