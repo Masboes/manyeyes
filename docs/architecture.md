@@ -36,7 +36,7 @@ manyeyes CLI ──► engine ◄── server (FastAPI: web UI, /api, /mcp, Git
 2. The worker claims it, resolves the settings (file, environment, web UI overrides) and clones the change.
 3. The runner starts every reviewer in its own jail. Each one reads the code, writes a review and exits.
 4. When enough reviews have succeeded (quorum), the remaining reviewers get a short grace period, then they are stopped.
-5. The synthesis merges the reviews by agreement.
+5. The synthesis merges the reviews. The model sees them under anonymous labels (R1, R2, … in random order, no model names), to reduce vendor bias; it returns the merged findings as JSON. The code then places each finding by agreement (cross-family, single-family, singleton) and lists low-severity single-reviewer points under "Minor notes".
 6. The store records each reviewer's outcome, duration and tokens, the synthesis and the rendered result. The MCP call that was waiting returns the synthesis.
 
 ## Outcomes
