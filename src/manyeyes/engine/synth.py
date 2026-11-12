@@ -56,7 +56,8 @@ not upgrade a suggestion into a defect.
 - In any text, refer to reviewers only by their labels with the brackets, one by one \
 ([R2], [R3], [R4]), never as a range."""
 
-_LABEL = re.compile(r"\[(R\d{1,3})\]")
+_LABEL = re.compile(r"(?<![\w\]\[])\[(R\d{1,3})\](?![\[\w])")
+_ANY_LABEL = re.compile(r"\bR(\d{1,3})\b", re.I)
 
 
 def anonymize(runs: list[ReviewerRun], rng: random.Random | None = None) -> dict[str, ReviewerRun]:
@@ -84,18 +85,15 @@ def _text(value) -> str:
     return " ".join(str(value).split()) if isinstance(value, (str, int, float)) else ""
 
 
-def _first_sentence(text: str) -> str:
-    m = re.match(r"(.+?[.!?])(\s|$)", text)
-    return (m[1] if m else text)[:240]
-
-
 def render_review(data: dict, labels: dict[str, ReviewerRun]) -> str:
     """Place every finding by agreement, from the model's JSON. Raises ValueError."""
     if not isinstance(data, dict):
         raise ValueError("not a JSON object")
-    findings = data.get("findings", [])
-    if not isinstance(findings, list):
-        raise ValueError("no findings list")
+    findings = data.get("findings")
+    if not isinstance(findings, list) or not all(isinstance(f, dict) for f in findings):
+        raise ValueError("findings must be a list of objects")
+    if not isinstance(data.get("verdict"), str) or not data["verdict"].strip():
+        raise ValueError("no verdict")
     total = len(labels)
     kinds = {r.spec.kind for r in labels.values()}
     multi = len(kinds) > 1
@@ -108,32 +106,30 @@ def render_review(data: dict, labels: dict[str, ReviewerRun]) -> str:
     minor: list[str] = []
     unlinked: list[str] = []
     for item in findings:
-        if not isinstance(item, dict):
-            continue
         raw = item.get("reviewers")
         raw = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []
         who: list[ReviewerRun] = []
-        for label in raw:
-            label = _text(label).strip("[]")
-            if label in labels and labels[label] not in who:
-                who.append(labels[label])
+        for entry in raw:               # "[R2]", "R2", "r2" or "R2, R3"
+            for num in _ANY_LABEL.findall(_text(entry)):
+                label = f"R{int(num)}"
+                if label in labels and labels[label] not in who:
+                    who.append(labels[label])
         sev = _text(item.get("severity")).lower()
         sev = sev if sev in SEVERITIES else "medium"
         title = _names(_text(item.get("title")), labels) or "Untitled finding"
-        loc = _text(item.get("location")).strip("`") or "(no location)"
+        loc = _text(item.get("location")).replace("`", "") or "(no location)"
         loc_md = loc if loc == "(no location)" else f"`{loc}`"
-        body = _names(str(item.get("text") or "").strip() if isinstance(item.get("text"), str)
-                      else "", labels)
+        body = _names(_text(item.get("text")) if isinstance(item.get("text"), str) else "",
+                      labels)
         if not who:      # the model named no reviewer we know: show it, flagged
-            unlinked.append(f"- {title} — {loc_md} — {sev}" + (f": {_first_sentence(body)}"
-                                                              if body else ""))
+            unlinked.append((SEVERITIES.index(sev),
+                             f"- {title} — {loc_md} — {sev}" + (f": {body}" if body else "")))
             continue
         who.sort(key=lambda r: (r.spec.kind, r.spec.instance))
         cited = ", ".join(r.spec.name for r in who)
         fams = len({r.spec.kind for r in who})
         if len(who) == 1 and sev == "low":
-            minor.append(f"- {title} — {loc_md} **[{cited}]**"
-                         + (f": {_first_sentence(body)}" if body else ""))
+            minor.append(f"- {title} — {loc_md} **[{cited}]**" + (f": {body}" if body else ""))
             continue
         count = (f"{fams} famil{'ies' if fams > 1 else 'y'} · " if multi else "") \
             + f"{len(who)} of {total} reviewers"
@@ -145,25 +141,19 @@ def render_review(data: dict, labels: dict[str, ReviewerRun]) -> str:
         if sections[name]:
             out.append(f"## {name}\n\n" + "\n\n".join(b for *_, b in sorted(
                 sections[name], key=lambda x: x[:2])))
+    if unlinked:
+        out.append("## Unlinked findings\n\nThe synthesis could not link these to a review. "
+                   "Check them against the reviews before you act.\n\n"
+                   + "\n".join(b for _, b in sorted(unlinked, key=lambda x: x[0])))
     if minor:
         out.append("## Minor notes\n\nLow-severity points that one reviewer raised.\n\n"
                    + "\n".join(minor))
-    if unlinked:
-        out.append("## Unlinked findings\n\nThe synthesis could not link these to a review. "
-                   "Check them against the reviews before you act.\n\n" + "\n".join(unlinked))
     dis = data.get("disagreements") or []
     dis = [dis] if isinstance(dis, str) else dis if isinstance(dis, list) else []
     dis = [_names(_text(d), labels) for d in dis if _text(d)]
     if dis:
         out.append("## Disagreements\n\n" + "\n".join(f"- {d}" for d in dis))
-    verdict = data.get("verdict")
-    verdict = _names(verdict.strip(), labels) if isinstance(verdict, str) else ""
-    if verdict:
-        out.append(f"## Verdict\n\n{verdict}")
-    if not out:
-        if not findings and "verdict" in data:
-            return "## Verdict\n\nThe reviewers found no issues."
-        raise ValueError("empty synthesis")
+    out.append(f"## Verdict\n\n{_names(data['verdict'].strip(), labels)}")
     return "\n\n".join(out)
 
 
@@ -228,10 +218,10 @@ async def synthesize(prompt: str, runs: list[ReviewerRun], settings: Settings,
     start = time.monotonic()
     try:
         if kind == "spar":
-            request = {"messages": [{"role": "system", "content": SPAR},
+            request = {"messages": [{"role": "system", "content": system_prompt(runs, kind)},
                                     {"role": "user", "content": user_prompt(prompt, runs)}]}
         else:
-            request = {"messages": [{"role": "system", "content": REVIEW},
+            request = {"messages": [{"role": "system", "content": system_prompt(runs, kind)},
                                     {"role": "user",
                                      "content": review_user_prompt(prompt, runs, labels)}],
                        "response_format": {"type": "json_object"}}
@@ -263,7 +253,7 @@ async def synthesize(prompt: str, runs: list[ReviewerRun], settings: Settings,
     if kind != "spar":
         try:
             text = render_review(json.loads(text), labels)
-        except (ValueError, TypeError, AttributeError) as e:   # incl. JSONDecodeError
+        except (ValueError, TypeError, AttributeError, RecursionError) as e:   # JSONDecodeError too
             return SynthRun(model, "error", duration_s=elapsed, usage=usage,
                             failure_detail=f"the model returned an unusable synthesis: {e}"[:300])
     return SynthRun(model, "success", text=text, duration_s=elapsed, usage=usage)

@@ -71,7 +71,7 @@ result = await run_swarm(task, roster, workdir, limits, store, on_event)
 | `jail.py` | Starts each reviewer inside a bubblewrap jail (section 3.3). |
 | `runner.py` | Runs all reviewers in parallel. Hard per-reviewer timeout, straggler policy, cancel. Emits events (`reviewer_started`, `reviewer_finished`, `synth_started`, …). |
 | `classify.py` | Maps an exit to one outcome (section 6). Structured error events first, regex fallback second. |
-| `synth.py` | One OpenAI API call that groups findings by agreement. Never load-bearing: a failed synthesis still returns every review. |
+| `synth.py` | One OpenAI API call that merges the anonymous reviews into JSON findings; the code then groups them by agreement. Never load-bearing: a failed synthesis still returns every review. |
 | `bundle.py` | Renders markdown for humans and a JSON result for machines. |
 
 Rules for the engine:
@@ -181,7 +181,7 @@ Per-user repository permissions (for example, using each user's own GitHub token
 | Codex worker, per-instance `CODEX_HOME`, spawn jitter | **Kept** | Fixes measured startup races at 5–10 instances. |
 | Claude worker | **Kept**, optional | Supported reviewer, off by default. |
 | Cursor, Gemini workers | **Dropped** | No working credentials; off by default today. |
-| Family-grouped synthesis prompt | **Rewritten** | Groups by family when the roster has more than one family, by agreement count otherwise. |
+| Family-grouped synthesis prompt | **Rewritten** | The model merges anonymous reviews; the code groups by family when the roster has more than one family, by agreement count otherwise. |
 | Synthesis via OpenAI API | **Kept** | Now the only use of the API key. |
 | Bash host wrapper, `install.sh` | **Dropped** | Replaced by the Python launcher and `uv tool install`. |
 | Bundle markdown on disk as the interface | **Dropped** | Results live in the database. Markdown is a rendering. |

@@ -44,22 +44,25 @@ def test_findings_are_placed_by_agreement():
         {"title": "Unchecked None", "location": "", "severity": "medium",
          "reviewers": [lab["claude#1"]], "text": "y"},
         {"title": "Typo in log", "location": "c.py:1", "severity": "low",
-         "reviewers": [lab["codex#3"]], "text": "The word is misspelt. Fix it later."},
+         "reviewers": [lab["codex#3"]], "text": "The word is misspelt.\nFix it later."},
         {"title": "Unknown source", "location": "d.py:1", "severity": "high", "reviewers": ["R99"],
-         "text": "Set MOV R1, R2 first."},
+         "text": "Set MOV R1, R2 and values[R1] first."},
+        {"title": "Loose labels", "severity": "medium",
+         "reviewers": f"{lab['codex#1'].strip('[]').lower()}, {lab['codex#3']}", "text": "q"},
     ], "disagreements": [f"{lab['codex#1']} says ship, {lab['claude#1']} says wait."],
         "verdict": f"Fix the race first ({lab['codex#2']})."}
     md = synth.render_review(data, labels)
     sections = [line for line in md.splitlines() if line.startswith("## ")]
     assert sections == ["## Cross-family consensus", "## Single-family consensus",
-                        "## Singleton findings", "## Minor notes", "## Unlinked findings",
+                        "## Singleton findings", "## Unlinked findings", "## Minor notes",
                         "## Disagreements", "## Verdict"]
     assert "### Lost update — `a.py:3` — high\n**[claude#1, codex#2]** · 2 families · 2 of 4" in md
     assert "claude#1 shows a race." in md
     assert "### Unchecked None — (no location) — medium" in md
-    assert "- Typo in log — `c.py:1` **[codex#3]**: The word is misspelt." in md
-    assert "Fix it later" not in md
-    assert "- Unknown source — `d.py:1` — high: Set MOV R1, R2 first." in md   # R1 untouched
+    assert "- Typo in log — `c.py:1` **[codex#3]**: The word is misspelt. Fix it later." in md
+    assert "- Unknown source — `d.py:1` — high: Set MOV R1, R2 and values[R1] first." in md
+    assert "### Loose labels — (no location) — medium\n**[codex#1, codex#3]**" in md
+    assert md.index("## Unlinked findings") < md.index("## Minor notes")
     assert "codex#1 says ship, claude#1 says wait." in md and "(codex#2)" in md
 
 
@@ -80,28 +83,29 @@ def test_single_family_sections_and_order():
     assert "families" not in md
 
 
-@pytest.mark.parametrize("data", [[], {"findings": "x"}, {}, {"findings": [{"title": "t"}]}])
+@pytest.mark.parametrize("data", [
+    [], {}, {"findings": "x", "verdict": "v"}, {"findings": [], "verdict": ""},
+    {"findings": [], "verdict": None}, {"verdict": "ok"},
+    {"findings": ["junk"], "verdict": "ok"}, {"findings": [], "verdict": 2}])
 def test_unusable_model_output_is_rejected(data):
     labels = synth.anonymize(RUNS, random.Random(1))
-    if data == {"findings": [{"title": "t"}]}:          # no reviewer at all: flagged, not lost
-        assert "## Unlinked findings" in synth.render_review(data, labels)
-        return
     with pytest.raises(ValueError):
         synth.render_review(data, labels)
 
 
-def test_odd_types_do_not_crash():
+def test_odd_field_types_do_not_crash():
     labels = synth.anonymize(RUNS, random.Random(1))
     data = {"findings": [{"title": 5, "severity": None, "reviewers": "R1", "text": 3},
-                         {"title": "x", "reviewers": 1}, "junk"],
-            "disagreements": 1, "verdict": 2}
+                         {"title": "x", "reviewers": 1}, {"title": "t"}],
+            "disagreements": 1, "verdict": "ok"}
     md = synth.render_review(data, labels)
     assert "### 5 — (no location) — medium" in md and "## Unlinked findings" in md
 
 
-def test_clean_result_is_not_an_error():
+def test_no_findings_shows_only_the_verdict():
     labels = synth.anonymize(RUNS, random.Random(1))
-    assert "no issues" in synth.render_review({"findings": [], "verdict": ""}, labels)
+    assert synth.render_review({"findings": [], "verdict": "Ship it."}, labels) == \
+        "## Verdict\n\nShip it."
 
 
 def test_spar_prompt_keeps_names():

@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 - The synthesis model no longer gets told which reviewer is Codex or Claude: reviews get anonymous labels in random order, without model or vendor names, to reduce vendor bias (a review's own wording can still give hints). The model returns the merged findings as JSON, and manyeyes places each finding by agreement itself, from the reviewers the model credits, so the model no longer counts families or reviewers. A finding the model credits to no known reviewer is shown under "Unlinked findings", not dropped.
-- Low-severity points that only one reviewer raised move to a short "Minor notes" list at the end. Nothing is dropped. In a blind test on 6 real PRs, the content matched the previous synthesis exactly (same real, false and dropped counts), and the judge preferred the new layout in all 6.
+- Low-severity points that only one reviewer raised move to a short "Minor notes" list at the end. Each keeps its full text on one line. In a blind test of the first version of this change on 6 real PRs, the content matched the previous synthesis exactly (same real, false and dropped counts), and the judge preferred the new layout in all 6.
 
 ## [1.1.2] — 2026-11-12
 
