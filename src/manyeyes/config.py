@@ -41,7 +41,7 @@ class Key:
 EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
 
 KEYS: tuple[Key, ...] = (
-    Key("data_dir", Path, "~/.manyeyes", "Database, runs, secrets file and auth homes."),
+    Key("data_dir", Path, "~/.manyeyes", "Database, runs, secrets file and auth homes. Keep it outside /tmp: Codex refuses to run its sandbox from there."),
     Key("auth_dir", Path, "", "Reviewer login homes (`codex/`, `claude/`). Default `<data_dir>/auth`."),
     Key("roster", str, "codex:8,claude:2",
         "Reviewers for a full run (the default mode).", editable=True),

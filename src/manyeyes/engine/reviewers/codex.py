@@ -13,6 +13,8 @@ from pathlib import Path
 from ..models import Usage
 from .base import Parsed, Reviewer
 
+# Seen when Codex 0.167+ runs with CODEX_HOME under /tmp: every command fails.
+SANDBOX_BROKEN = "execvp codex-linux-sandbox"
 
 class CodexReviewer(Reviewer):
     kind = "codex"
@@ -88,5 +90,12 @@ class CodexReviewer(Reviewer):
                 msg = (err.get("message") if isinstance(err, dict) else None) \
                     or ev.get("message") or json.dumps(ev)[:500]
                 errors.append(str(msg))
+        if SANDBOX_BROKEN in stdout or SANDBOX_BROKEN in stderr:
+            # Codex could not run a single command, so it never saw the code; its
+            # "review" only says so. Never count that as a review.
+            out.review = ""
+            errors.insert(0, "codex could not run commands: its sandbox helper "
+                             "(codex-linux-sandbox) is missing. Codex refuses to create it "
+                             "when its home is under /tmp: keep data_dir outside /tmp.")
         out.error_text = "\n".join(errors)
         return out
