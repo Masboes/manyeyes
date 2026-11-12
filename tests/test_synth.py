@@ -31,7 +31,7 @@ def test_labels_hide_the_reviewer_and_model():
 
 def labels_by_name():
     labels = synth.anonymize(RUNS, random.Random(7))
-    return labels, {r.spec.name: lab for lab, r in labels.items()}
+    return labels, {r.spec.name: f"[{lab}]" for lab, r in labels.items()}
 
 
 def test_findings_are_placed_by_agreement():
@@ -44,20 +44,22 @@ def test_findings_are_placed_by_agreement():
         {"title": "Unchecked None", "location": "", "severity": "medium",
          "reviewers": [lab["claude#1"]], "text": "y"},
         {"title": "Typo in log", "location": "c.py:1", "severity": "low",
-         "reviewers": [lab["codex#3"]], "text": "z"},
-        {"title": "Invented", "location": "d.py:1", "severity": "high", "reviewers": ["R99"]},
+         "reviewers": [lab["codex#3"]], "text": "The word is misspelt. Fix it later."},
+        {"title": "Unknown source", "location": "d.py:1", "severity": "high", "reviewers": ["R99"],
+         "text": "Set MOV R1, R2 first."},
     ], "disagreements": [f"{lab['codex#1']} says ship, {lab['claude#1']} says wait."],
         "verdict": f"Fix the race first ({lab['codex#2']})."}
     md = synth.render_review(data, labels)
     sections = [line for line in md.splitlines() if line.startswith("## ")]
     assert sections == ["## Cross-family consensus", "## Single-family consensus",
-                        "## Singleton findings", "## Minor notes", "## Disagreements",
-                        "## Verdict"]
+                        "## Singleton findings", "## Minor notes", "## Unlinked findings",
+                        "## Disagreements", "## Verdict"]
     assert "### Lost update — `a.py:3` — high\n**[claude#1, codex#2]** · 2 families · 2 of 4" in md
     assert "claude#1 shows a race." in md
     assert "### Unchecked None — (no location) — medium" in md
-    assert "- Typo in log — `c.py:1` **[codex#3]**" in md
-    assert "Invented" not in md and "R99" not in md
+    assert "- Typo in log — `c.py:1` **[codex#3]**: The word is misspelt." in md
+    assert "Fix it later" not in md
+    assert "- Unknown source — `d.py:1` — high: Set MOV R1, R2 first." in md   # R1 untouched
     assert "codex#1 says ship, claude#1 says wait." in md and "(codex#2)" in md
 
 
@@ -78,11 +80,34 @@ def test_single_family_sections_and_order():
     assert "families" not in md
 
 
-@pytest.mark.parametrize("data", [[], {"findings": "x"}, {"findings": [], "verdict": ""}])
+@pytest.mark.parametrize("data", [[], {"findings": "x"}, {}, {"findings": [{"title": "t"}]}])
 def test_unusable_model_output_is_rejected(data):
     labels = synth.anonymize(RUNS, random.Random(1))
+    if data == {"findings": [{"title": "t"}]}:          # no reviewer at all: flagged, not lost
+        assert "## Unlinked findings" in synth.render_review(data, labels)
+        return
     with pytest.raises(ValueError):
         synth.render_review(data, labels)
+
+
+def test_odd_types_do_not_crash():
+    labels = synth.anonymize(RUNS, random.Random(1))
+    data = {"findings": [{"title": 5, "severity": None, "reviewers": "R1", "text": 3},
+                         {"title": "x", "reviewers": 1}, "junk"],
+            "disagreements": 1, "verdict": 2}
+    md = synth.render_review(data, labels)
+    assert "### 5 — (no location) — medium" in md and "## Unlinked findings" in md
+
+
+def test_clean_result_is_not_an_error():
+    labels = synth.anonymize(RUNS, random.Random(1))
+    assert "no issues" in synth.render_review({"findings": [], "verdict": ""}, labels)
+
+
+def test_spar_prompt_keeps_names():
+    prompt = synth.user_prompt("q", RUNS)
+    assert "## codex#1 (codex-model-x, high)" in prompt
+    assert synth.system_prompt(RUNS, "spar") is synth.SPAR
 
 
 def test_synthesize_end_to_end(monkeypatch):
@@ -95,7 +120,7 @@ def test_synthesize_end_to_end(monkeypatch):
         async def create(self, **req):
             seen.update(req)
             user = req["messages"][1]["content"]
-            first = user.split("## ")[1].split("\n")[0]       # some label from the prompt
+            first = user.split("## ")[1].split("\n")[0]       # "[R3]": some label
             body = {"findings": [{"title": "Bug", "location": "x.py:1", "severity": "high",
                                   "reviewers": [first], "text": "t"}], "verdict": "fix it"}
             msg = types.SimpleNamespace(content=json.dumps(body))
@@ -112,4 +137,4 @@ def test_synthesize_end_to_end(monkeypatch):
     assert out.outcome == "success", out.failure_detail
     assert seen["response_format"] == {"type": "json_object"}
     assert "## Singleton findings" in out.text and "### Bug — `x.py:1` — high" in out.text
-    assert "R1" not in out.text and "R2" not in out.text
+    assert "[R" not in out.text
