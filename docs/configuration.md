@@ -50,7 +50,7 @@ straggler_grace_s = 90
 | `jail.enabled` | `MANYEYES_JAIL_ENABLED` | `True` |  | Run every reviewer in a bubblewrap jail. |
 | `container.memory` | `MANYEYES_CONTAINER_MEMORY` | — |  | Memory limit for the CLI's container, Docker syntax (for example `6g`). Empty: no limit. |
 | `container.cpus` | `MANYEYES_CONTAINER_CPUS` | — |  | CPU limit for the CLI's container (for example `8`). Empty: no limit. |
-| `image` | `MANYEYES_IMAGE` | `ghcr.io/masboes/manyeyes:1.1.2` |  | Docker image the local CLI starts (a development version uses the `main` image). |
+| `image` | `MANYEYES_IMAGE` | `ghcr.io/masboes/manyeyes:1.2.0` |  | Docker image the local CLI starts (a development version uses the `main` image). |
 | `server.host` | `MANYEYES_SERVER_HOST` | `127.0.0.1` |  | Address the server listens on. |
 | `server.port` | `MANYEYES_SERVER_PORT` | `8789` |  | Port the server listens on. |
 | `server.root_path` | `MANYEYES_SERVER_ROOT_PATH` | — |  | Fixed URL prefix, when the proxy sends no X-Forwarded-Prefix. |

@@ -5,7 +5,7 @@ You need Docker and a ChatGPT account with Codex access. Claude is optional.
 ## 1. Install
 
 ```bash
-uv tool install git+https://github.com/Masboes/manyeyes@v1.1.2   # or: pipx install git+...
+uv tool install git+https://github.com/Masboes/manyeyes@v1.2.0   # or: pipx install git+...
 ```
 
 (`uv tool install manyeyes` works once the package is on PyPI.)

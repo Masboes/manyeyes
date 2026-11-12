@@ -25,7 +25,7 @@ The CLI needs nothing but Docker and your reviewer logins. Run it in a repositor
 ### Install
 
 ```bash
-uv tool install git+https://github.com/Masboes/manyeyes@v1.1.2   # or: pipx install git+...
+uv tool install git+https://github.com/Masboes/manyeyes@v1.2.0   # or: pipx install git+...
 ```
 
 The CLI is small. The reviewers (Codex, Claude Code) and the sandbox ship in the manyeyes Docker image, which the CLI pulls on first use. (A PyPI package comes later.)
@@ -199,7 +199,7 @@ Every reviewer run is recorded: model, effort, duration, input/cached/output/rea
 
 ## Status
 
-`1.1.2` — stable.
+`1.2.0` — stable.
 
 ## License
 
