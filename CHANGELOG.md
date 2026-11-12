@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format follows [Kee
 - The synthesis model no longer gets told which reviewer is Codex or Claude: reviews get anonymous labels in random order, without model or vendor names, to reduce vendor bias (a review's own wording can still give hints). The model returns the merged findings as JSON, and manyeyes places each finding by agreement itself, from the reviewers the model credits, so the model no longer counts families or reviewers. A finding the model credits to no known reviewer is shown under "Unlinked findings", not dropped.
 - Low-severity points that only one reviewer raised move to a short "Minor notes" list at the end. Each keeps its full text on one line. In a blind test of the first version of this change on 6 real PRs, the content matched the previous synthesis exactly (same real, false and dropped counts), and the judge preferred the new layout in all 6.
 
+### Fixed
+- A review whose `branch` or `base` is a commit SHA (7 to 40 hex characters) no longer fails with "couldn't find remote ref". A branch with that name still wins; a short SHA is looked up on all branches. Context repositories (`owner/name@ref`) accept a commit SHA too.
+- A GitHub API call that fails with a 5xx or a connection error is retried twice (after 1 s and 3 s); a 4xx is not retried. A timeout is not retried. A `git fetch` or `ls-remote` that fails with a server or network error is retried once.
+- The straggler kill no longer removes a whole reviewer family. When the grace ends, a reviewer whose family (codex, claude) has no successful review yet keeps running until one of its family succeeds, it reaches its own timeout, or the job needs the remaining time for the synthesis. This keeps the cross-family view in the synthesis.
+
 ## [1.1.2] — 2026-11-12
 
 First public release: the repository is now `Masboes/manyeyes`, open source under Apache-2.0.

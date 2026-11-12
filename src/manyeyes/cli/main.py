@@ -75,9 +75,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--repo", help="GitHub owner/name: clone and review instead of a local path")
     g = r.add_mutually_exclusive_group()
     g.add_argument("--pr", type=int, help="pull request number (with --repo)")
-    g.add_argument("--branch", help="head branch (with --repo)")
+    g.add_argument("--branch", help="head branch or commit SHA (with --repo)")
     r.add_argument("--focus", default="", help="extra instructions for the reviewers")
-    r.add_argument("--context", action="append", default=[], metavar="OWNER/NAME[@BRANCH]",
+    r.add_argument("--context", action="append", default=[], metavar="OWNER/NAME[@REF]",
                    help="a related GitHub repository the reviewers get read-only, to check "
                         "cross-repo breakage (repeat, at most 5)")
     swarm_opts(r)

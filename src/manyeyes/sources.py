@@ -31,6 +31,10 @@ class SourceError(RuntimeError):
     pass
 
 
+class RefNotFound(SourceError):
+    """The remote has no such branch or commit. The message is safe to show."""
+
+
 # Never let a repository's own config run code on the host while we read it.
 SAFE_GIT = ("-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
             "-c", "protocol.file.allow=always")
@@ -50,6 +54,10 @@ def _check_ref(ref: str) -> str:
     if not ref or ref.startswith("-") or any(c in ref for c in " ~^:?*[\\"):
         raise SourceError(f"not a valid ref: {ref!r}")
     return ref
+
+
+# A branch or base may also be a commit: 7 to 40 hex characters.
+SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
 
 # --- local checkout -------------------------------------------------------
@@ -277,18 +285,23 @@ async def prepare_context(items: list[str] | None, cache_root: Path, dest_root: 
             except SourceError:
                 await _run(["git", "-C", str(cache), "remote", "add", "origin", url], env, timeout)
             if not ref:
-                head = await _run(["git", "-C", str(cache), "ls-remote", "--symref", "origin",
-                                   "HEAD"], env, timeout)
+                head = await _run_net(["git", "-C", str(cache), "ls-remote", "--symref",
+                                       "origin", "HEAD"], env, timeout)
                 m = re.search(r"ref: refs/heads/(\S+)\s+HEAD", head)
                 ref = m.group(1) if m else "main"
             # One flat ref per fetch: cached remote-tracking refs could otherwise
             # block a branch name below an old one (release vs release/v2).
             try:
-                await _run(["git", "-C", str(cache), "fetch", "-q", "--no-tags", "origin",
-                            f"+refs/heads/{ref}:refs/manyeyes/fetched"], env, timeout)
+                await _fetch_branch_or_commit(cache, env, timeout, ref,
+                                              "refs/manyeyes/fetched", "refs/manyeyes/fetched")
+            except RefNotFound as e:
+                raise SourceError(f"{repo}: {e}") from e
             except SourceError as e:
-                raise SourceError(f"{repo}: cannot fetch branch {ref!r} (branches only, "
-                                  f"not tags or commits)") from e
+                # git's own words, without the command (it names a local path).
+                msg = str(e)
+                cause = ("timed out" if msg.startswith("timed out")
+                         else msg.split(" failed: ", 1)[-1].strip()[-200:])
+                raise SourceError(f"{repo}: cannot fetch {ref!r}: {cause}") from e
             sha = await _run(["git", "-C", str(cache), "rev-parse", "refs/manyeyes/fetched"],
                              env, timeout)
             # Keep recent commits reachable for jobs still reading them; drop older ones.
@@ -344,6 +357,7 @@ def evict_context_cache(cache_root: Path, older_than_s: float) -> list[str]:
 def git_auth_env(token: str) -> dict[str, str]:
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "LANG")}
     env["GIT_TERMINAL_PROMPT"] = "0"
+    env["LC_ALL"] = "C"   # English messages: the ref and retry checks match on them
     if token:
         basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
         env.update({"GIT_CONFIG_COUNT": "1",
@@ -352,13 +366,38 @@ def git_auth_env(token: str) -> dict[str, str]:
     return env
 
 
+# Waits before each retry of a GitHub call that failed with a 5xx or a
+# connection error. A 4xx is never retried, and neither is a timeout: the
+# 30 s timeout is already the budget for one call.
+RETRY_DELAYS_S = (1.0, 3.0)
+_HTTP_RETRY = (httpx.ConnectError, httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError)
+
+
+async def _github_get(url: str, headers: dict[str, str]) -> httpx.Response:
+    async with httpx.AsyncClient(timeout=30) as client:
+        for delay in (*RETRY_DELAYS_S, None):
+            try:
+                r = await client.get(url, headers=headers)
+            except _HTTP_RETRY:
+                if delay is None:
+                    raise
+            else:
+                if r.status_code < 500 or delay is None:
+                    return r
+            await asyncio.sleep(delay)
+    raise AssertionError("unreachable")
+
+
 async def resolve_pr(repo: str, pr: int, token: str) -> tuple[str, str]:
     """(head ref, base ref) of a pull request."""
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(f"https://api.github.com/repos/{repo}/pulls/{pr}", headers=headers)
+    url = f"https://api.github.com/repos/{repo}/pulls/{pr}"
+    try:
+        r = await _github_get(url, headers)
+    except httpx.TransportError as e:
+        raise SourceError(f"cannot reach GitHub for {repo}#{pr}: {type(e).__name__}") from e
     if r.status_code != 200:
         raise SourceError(f"GitHub returned {r.status_code} for {repo}#{pr}")
     data = r.json()
@@ -403,6 +442,82 @@ async def _run(argv: list[str], env: dict[str, str], timeout: float,
     return text.strip()
 
 
+# git errors worth one retry: a 5xx from the server or a dropped connection.
+# An HTTP 4xx in the same message wins: it never gets a retry.
+HTTP_4XX_RE = re.compile(r"returned error: 4\d\d|HTTP 4\d\d")
+NET_ERROR_RE = re.compile(
+    r"returned error: 5\d\d|HTTP 5\d\d|Could not resolve host|Failed to connect"
+    r"|Connection reset|Connection refused|Connection timed out|early EOF"
+    r"|remote end hung up unexpectedly|unexpected disconnect|gnutls_handshake"
+    r"|SSL_ERROR_SYSCALL|SSL_connect|TLS connection was non-properly terminated")
+
+
+async def _run_net(argv: list[str], env: dict[str, str], timeout: float) -> str:
+    """_run for a git command that talks to the remote: retry a network error once."""
+    try:
+        return await _run(argv, env, timeout)
+    except SourceError as e:
+        msg = str(e)
+        if (MISSING_OBJECT_RE.search(msg) or HTTP_4XX_RE.search(msg)
+                or not NET_ERROR_RE.search(msg)):
+            raise
+    await asyncio.sleep(RETRY_DELAYS_S[0])
+    return await _run(argv, env, timeout)
+
+
+# git's words for "the remote has no such object" when fetching by SHA.
+MISSING_OBJECT_RE = re.compile(r"not our ref|couldn't find remote ref|no such remote ref"
+                               r"|unadvertised object|upload-pack: not our")
+
+
+async def _fetch_branch_or_commit(repo_dir: Path, env: dict[str, str], timeout: float,
+                                  name: str, branch_ref: str, commit_ref: str,
+                                  *fetch_opts: str) -> str:
+    """Fetch branch `name` into `branch_ref` and return that ref.
+
+    When the remote has no such branch and `name` looks like a commit SHA, fetch
+    that commit into `commit_ref` instead. The branch goes first, so a branch
+    whose name looks like hex still works. GitHub serves a reachable commit by
+    its full SHA; a short SHA is resolved against all branches.
+    """
+    fetch = ["git", "-C", str(repo_dir), "fetch", "-q", "--no-tags", *fetch_opts, "origin"]
+    try:
+        await _run_net([*fetch, f"+refs/heads/{name}:{branch_ref}"], env, timeout)
+        return branch_ref
+    except SourceError as e:
+        if "couldn't find remote ref" not in str(e):
+            raise
+        if not SHA_RE.fullmatch(name):
+            raise RefNotFound(f"no branch {name!r} (tags are not supported)") from e
+    sha = name.lower()
+    if len(sha) == 40:
+        try:
+            await _run_net([*fetch, f"+{sha}:{commit_ref}"], env, timeout)
+        except SourceError as e:
+            if not MISSING_OBJECT_RE.search(str(e)):
+                raise
+            raise RefNotFound(f"{name!r} is not a branch, and the remote does not serve "
+                              f"it as a commit") from e
+        full = sha
+    else:
+        await _run_net([*fetch, "--prune", "+refs/heads/*:refs/manyeyes/scan/*"],
+                       env, timeout)
+        full = ""
+    try:
+        full = await _run(["git", "-C", str(repo_dir), "rev-parse", "--verify",
+                           "--end-of-options", f"{full or sha}^{{commit}}"], env, timeout)
+    except SourceError as e:
+        msg = str(e)
+        if "timed out" in msg:
+            raise
+        if "ambiguous" in msg:
+            raise RefNotFound(f"short SHA {name!r} is ambiguous; pass more characters") from e
+        hint = "" if full else " on any branch (pass the full 40-character SHA)"
+        raise RefNotFound(f"{name!r} is not a branch, and not a commit{hint}") from e
+    await _run(["git", "-C", str(repo_dir), "update-ref", commit_ref, full], env, timeout)
+    return commit_ref
+
+
 async def clone_review(repo: str, dest: Path, *, token: str, timeout: float,
                        pr: int | None = None, head: str | None = None,
                        base: str | None = None, instructions: str = "") -> ReviewTask:
@@ -441,24 +556,29 @@ async def _clone(repo: str, dest: Path, env: dict[str, str], timeout: float, pr:
     await _run(["git", "init", "-q", str(dest)], env, timeout)
     await _run(["git", "-C", str(dest), "remote", "add", "origin", url], env, timeout)
     if not base:
-        out = await _run(["git", "-C", str(dest), "ls-remote", "--symref", "origin", "HEAD"],
-                         env, timeout)
+        out = await _run_net(["git", "-C", str(dest), "ls-remote", "--symref", "origin",
+                              "HEAD"], env, timeout)
         m = re.search(r"ref: refs/heads/(\S+)\s+HEAD", out)
         base = m.group(1) if m else "main"
     # A PR always fetches refs/pull/N/head: it exists for forks, deleted forks
     # and moved branches alike.
-    head_src = (f"refs/pull/{pr}/head" if pr is not None
-                else head if head.startswith("refs/") else f"refs/heads/{head}")
-    await _run(["git", "-C", str(dest), "fetch", "-q", "--no-tags", "--filter=blob:none",
-                "origin",
-                f"+{head_src}:refs/remotes/origin/manyeyes-head",
-                f"+refs/heads/{base}:refs/remotes/origin/{base}"], env, timeout)
-    await _run(["git", "-C", str(dest), "checkout", "-q", "--detach",
-                "refs/remotes/origin/manyeyes-head"], env, timeout)
+    # Outside refs/remotes/origin/, so no base branch name can overwrite it.
+    head_ref = "refs/manyeyes/head"
+    blobless = "--filter=blob:none"
+    if pr is not None or head.startswith("refs/"):
+        head_src = f"refs/pull/{pr}/head" if pr is not None else head
+        await _run_net(["git", "-C", str(dest), "fetch", "-q", "--no-tags", blobless, "origin",
+                        f"+{head_src}:{head_ref}"], env, timeout)
+    else:
+        await _fetch_branch_or_commit(dest, env, timeout, head, head_ref, head_ref, blobless)
+    base_ref = await _fetch_branch_or_commit(dest, env, timeout, base,
+                                             f"refs/remotes/origin/{base}",
+                                             "refs/manyeyes/base", blobless)
+    await _run(["git", "-C", str(dest), "checkout", "-q", "--detach", head_ref], env, timeout)
     head_sha = await _run(["git", "-C", str(dest), "rev-parse", "HEAD"], env, timeout)
     try:
-        base_sha = await _run(["git", "-C", str(dest), "merge-base",
-                               f"refs/remotes/origin/{base}", "HEAD"], env, timeout)
+        base_sha = await _run(["git", "-C", str(dest), "merge-base", base_ref, "HEAD"],
+                              env, timeout)
     except SourceError as e:
         raise SourceError(f"{head} and {base} share no history") from e
     # Prefetch the base side of every changed file (the head side came with
@@ -467,6 +587,9 @@ async def _clone(repo: str, dest: Path, env: dict[str, str], timeout: float, pr:
     await _run(["git", "-C", str(dest), "diff", "--no-ext-diff", "--no-textconv", "--patch",
                 "--output=/dev/null", base_sha, "HEAD"], env, timeout)
     label = f"{repo}#{pr}" if pr is not None else f"{repo}@{head}"
-    return ReviewTask(label=label, base_ref=f"origin/{base}", base_sha=base_sha,
+    # A commit base shows as its full SHA: a short one can turn ambiguous later.
+    base_label = (f"origin/{base}" if base_ref.startswith("refs/remotes/") else
+                  await _run(["git", "-C", str(dest), "rev-parse", base_ref], env, timeout))
+    return ReviewTask(label=label, base_ref=base_label, base_sha=base_sha,
                       head_ref=head if pr is None else f"PR #{pr} ({head})",
                       head_sha=head_sha, instructions=instructions)

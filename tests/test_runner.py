@@ -42,6 +42,109 @@ async def test_straggler_killed_after_quorum(settings, tmp_path):
     assert res.status == "done" and res.partial
 
 
+@pytest.fixture
+def claude_login(settings):
+    """A fake Claude login, so the fake `claude` CLI can run as a reviewer."""
+    (settings.auth_dir / "claude").mkdir(parents=True, exist_ok=True)
+    (settings.auth_dir / "claude" / ".credentials.json").write_text("{}")
+
+
+async def test_straggler_kill_spares_a_family_without_a_success(settings, tmp_path, claude_login):
+    # Quorum 4 of 5 comes from codex alone. The two claude reviewers are still
+    # running when the 1 s grace ends: they are spared, because claude has no
+    # success yet. The first claude success then ends the other claude run.
+    res = await run(settings, "codex:4@ok,codex:1@hang,claude:1@slow-3,claude:1@hang", tmp_path,
+                    **{"limits.quorum_fraction": 0.5})
+    o = {r.spec.name: r for r in res.runs}
+    assert [o[f"codex#{i}"].outcome for i in range(1, 5)] == [Outcome.SUCCESS] * 4
+    assert o["codex#5"].outcome == Outcome.STRAGGLER_KILLED
+    assert o["codex#5"].duration_s < 3   # killed at the end of the grace, not later
+    assert o["claude#1"].outcome == Outcome.SUCCESS
+    assert o["claude#2"].outcome == Outcome.STRAGGLER_KILLED
+    assert "family succeeded" in o["claude#2"].failure_reason
+    assert "grace" in o["codex#5"].failure_reason
+    assert o["claude#2"].finished_at >= o["claude#1"].finished_at
+    assert o["claude#2"].duration_s < 10
+
+
+async def test_spared_family_runs_to_its_timeout(settings, tmp_path, claude_login):
+    # No claude reviewer ever succeeds: the spared one ends at its own timeout.
+    res = await run(settings, "codex:2@ok,claude:1@hang", tmp_path,
+                    **{"limits.quorum_fraction": 0.5, "limits.reviewer_timeout_s": 3})
+    o = {r.spec.name: r for r in res.runs}
+    assert o["claude#1"].outcome == Outcome.TIMEOUT
+
+
+async def test_family_with_a_success_is_killed_as_before(settings, tmp_path, claude_login):
+    res = await run(settings, "codex:1@ok,claude:1@ok,codex:1@hang,claude:1@hang", tmp_path,
+                    **{"limits.quorum_fraction": 0.5})
+    o = {r.spec.name: r for r in res.runs}
+    assert o["codex#2"].outcome == o["claude#2"].outcome == Outcome.STRAGGLER_KILLED
+    assert max(o["codex#2"].duration_s, o["claude#2"].duration_s) < 10
+
+
+async def test_spared_reviewer_is_killed_in_time_for_the_job_deadline(settings, tmp_path,
+                                                                     claude_login):
+    # The job deadline is close: the spared claude reviewer must go before its
+    # own 20 s timeout, so the job keeps the codex reviews.
+    import time
+
+    from manyeyes.engine import runner as runner_mod
+    s = settings.with_layer("test", {"limits.quorum_fraction": 0.5})
+    r = Runner(s)
+    old = runner_mod.DEADLINE_MARGIN_S
+    runner_mod.DEADLINE_MARGIN_S = 0.0
+    try:
+        res = await r.run(SparTask("q"), build_specs("codex:2@ok,claude:1@hang", s), tmp_path,
+                          deadline=time.monotonic() + 4)
+    finally:
+        runner_mod.DEADLINE_MARGIN_S = old
+    o = {x.spec.name: x for x in res.runs}
+    assert o["claude#1"].outcome == Outcome.STRAGGLER_KILLED
+    assert "job deadline" in o["claude#1"].failure_reason
+    assert o["claude#1"].duration_s < 10
+
+
+async def test_grace_is_capped_by_the_job_deadline(settings, tmp_path):
+    # A long grace must not run past the time the synthesis needs.
+    import time
+
+    from manyeyes.engine import runner as runner_mod
+    s = settings.with_layer("test", {"limits.quorum_fraction": 0.5,
+                                     "limits.straggler_grace_s": 60})
+    old = runner_mod.DEADLINE_MARGIN_S
+    runner_mod.DEADLINE_MARGIN_S = 0.0
+    try:
+        res = await Runner(s).run(SparTask("q"), build_specs("codex:1@ok,codex:1@hang", s),
+                                  tmp_path, deadline=time.monotonic() + 3)
+    finally:
+        runner_mod.DEADLINE_MARGIN_S = old
+    assert res.runs[1].outcome == Outcome.STRAGGLER_KILLED
+    assert res.runs[1].duration_s < 10
+
+
+async def test_first_kill_reason_keeps_its_detail():
+    from manyeyes.engine.runner import _Proc
+    h = _Proc()
+    await h.kill(Outcome.TIMEOUT)
+    await h.kill(Outcome.STRAGGLER_KILLED, "straggler kill: something else")
+    assert (h.kill_reason, h.kill_detail) == (Outcome.TIMEOUT, "")
+
+
+async def test_cancel_ends_a_reviewer_that_waits_for_a_slot(settings, tmp_path):
+    # Another job holds the only slot: a cancel must not wait for it.
+    slots = asyncio.Semaphore(1)
+    await slots.acquire()
+    r = Runner(settings, slots=slots)
+    t = asyncio.create_task(r.run(SparTask("q"), build_specs("codex:1@ok", settings), tmp_path))
+    await asyncio.sleep(0.3)
+    await r.cancel()
+    res = await asyncio.wait_for(t, 5)
+    assert res.runs[0].outcome == Outcome.CANCELLED
+    slots.release()
+    assert not slots.locked()   # the cancelled reviewer did not keep a slot
+
+
 async def test_failures_do_not_arm_the_straggler_timer(settings, tmp_path):
     # Three fast rate-limit failures: quorum (4 of 5) becomes impossible, so
     # the two slow reviewers must run to completion, not be killed.

@@ -234,7 +234,8 @@ def create_mcp(settings: Settings, store: Store, worker: Worker, auth: Auth) -> 
         not call it twice on the same diff.
 
         `repo` is owner/name. Give EITHER `pr` (a PR number) OR `branch` (head) with an
-        optional `base` (default: the repository's default branch). `agents` is an optional
+        optional `base` (default: the repository's default branch). `branch` and `base` may
+        also be a commit SHA (7-40 hex characters); a branch with that name wins. `agents` is an optional
         roster such as "codex:10" or "codex:8,claude:2". `focus` adds instructions for the
         reviewers. `no_synth` skips the synthesis.
 
@@ -247,7 +248,7 @@ def create_mcp(settings: Settings, store: Store, worker: Worker, auth: Auth) -> 
           so it is EXPENSIVE: use it only for risky changes (concurrency, auth, data
           migrations, timeouts, behaviour that depends on third-party libraries), not by default.
 
-        `context_repos` — optional, at most 5, as "owner/name" or "owner/name@branch": other
+        `context_repos` — optional, at most 5, as "owner/name" or "owner/name@branch" (or @sha): other
         repositories the reviewers get read-only, to check whether this change breaks
         something there (a caller, a shared API contract, an event or message shape, a
         schema). Pass only repos this change actually talks to; each one adds reading time.

@@ -232,6 +232,7 @@ docs/                design, quickstart, self-hosting, configuration, architectu
 - `quorum = ceil(limits.quorum_fraction × N)`, default fraction `0.8`. N is the number of reviewers launched.
 - Only `success` counts toward quorum. Failures never arm the straggler timer, so fast failures cannot cut short the reviewers that still work.
 - When quorum is reached, the reviewers still running get `limits.straggler_grace_s` (default 120 s), then they are killed with outcome `straggler_killed`.
+- The kill is family-aware. A family is a reviewer kind (`codex`, `claude`). When the grace runs out, a reviewer whose family has no successful review yet keeps running: agreement across families is the strongest signal, so one review of each family is worth the wait. It runs until its hard timeout, or until a reviewer of its family succeeds; then the rest of that family is killed at once. Families with a success are killed as before. A spared reviewer is also killed when only the synthesis budget (`limits.synth_timeout_s`) plus a short margin is left before the job timeout, so the job keeps the reviews already done.
 - When quorum becomes impossible (too many failures), no straggler timer runs. The remaining reviewers run to the hard timeout (`limits.reviewer_timeout_s`, default 1200 s).
 
 ### Job outcome
