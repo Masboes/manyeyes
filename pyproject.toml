@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "manyeyes"
+dynamic = ["version"]
+description = "Run a swarm of independent AI code reviewers and merge their findings into one synthesis."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Mathijs Boezer" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Quality Assurance",
+    "Environment :: Console",
+]
+dependencies = [
+    "httpx>=0.27",
+    "openai>=1.40",
+    "tzdata>=2024.1",   # zoneinfo in slim images (usage reset times)
+]
+
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "PyJWT>=2.8",
+    "fastmcp>=3.4,<4",
+]
+
+[project.scripts]
+manyeyes = "manyeyes.cli.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+]
+
+[tool.hatch.version]
+path = "src/manyeyes/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/manyeyes"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "live: needs real reviewer logins and network (deselected by default)",
+]
+addopts = "-m 'not live'"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends"]

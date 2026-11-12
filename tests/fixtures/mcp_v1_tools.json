@@ -1,0 +1,11 @@
+{
+  "_source": "the MCP server of agent-swarm-cloud, the tool before manyeyes",
+  "swarm_review": {"args": ["repo", "pr", "branch", "base", "agents", "no_synth"], "required": ["repo"]},
+  "swarm_spar": {"args": ["prompt", "agents", "no_synth"], "required": ["prompt"]},
+  "swarm_ls": {"args": ["limit"], "required": []},
+  "swarm_status": {"args": ["id"], "required": ["id"]},
+  "swarm_get": {"args": ["id", "full"], "required": ["id"]},
+  "swarm_logs": {"args": ["id"], "required": ["id"]},
+  "swarm_cancel": {"args": ["id"], "required": ["id"]},
+  "swarm_stats": {"args": [], "required": []}
+}

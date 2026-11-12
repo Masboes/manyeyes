@@ -1,0 +1,29 @@
+# manyeyes server with Docker Compose. See docs/self-hosting.md.
+#
+#   mkdir data && echo your-github-login > data/allowlist.txt
+#   # put secrets in data/secrets.env and settings in data/server.env
+#   UID=$(id -u) GID=$(id -g) docker compose up -d
+services:
+  manyeyes:
+    image: ghcr.io/masboes/manyeyes:latest
+    command: ["manyeyes", "serve"]
+    user: "${UID:-10001}:${GID:-10001}"
+    ports:
+      - "127.0.0.1:8789:8789"
+    volumes:
+      - ./data:/data
+    env_file:
+      - path: ./data/server.env
+        required: false
+      - path: ./data/secrets.env
+        required: false
+    # The reviewer jail (bubblewrap) creates user namespaces and a fresh /proc.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - systempaths=unconfined
+    # One ceiling for the server and every reviewer (they share this container).
+    mem_limit: ${MANYEYES_MEMORY:-6g}
+    memswap_limit: ${MANYEYES_MEMORY:-6g}
+    cpus: ${MANYEYES_CPUS:-0}          # 0: no CPU limit
+    restart: unless-stopped

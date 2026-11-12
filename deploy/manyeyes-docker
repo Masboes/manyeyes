@@ -1,0 +1,45 @@
+#!/bin/sh
+# Run the manyeyes server container in the foreground (for systemd).
+#
+# Reads its settings from the environment (the systemd unit loads them from
+# an env file):
+#   CONTAINER   container name                  (default: manyeyes)
+#   IMAGE       image                           (default: ghcr.io/masboes/manyeyes:latest)
+#   DATA_DIR    host data dir, mounted at /data (required)
+#   PUBLISH     space-separated -p specs        (default: 127.0.0.1:8789:8789)
+#   MEMORY      memory limit for ALL of manyeyes: server and every reviewer
+#               (Docker syntax, for example 6g; default: none)
+#   CPUS        CPU limit, for example 8 (default: none)
+#   PULL        1: pull IMAGE before every start, so a restart updates
+#               (use with a moving tag such as :latest)
+# The server's own settings come from $DATA_DIR/server.env (plain settings)
+# and $DATA_DIR/secrets.env (secrets), both optional.
+set -eu
+: "${DATA_DIR:?set DATA_DIR}"
+CONTAINER="${CONTAINER:-manyeyes}"
+IMAGE="${IMAGE:-ghcr.io/masboes/manyeyes:latest}"
+PUBLISH="${PUBLISH:-127.0.0.1:8789:8789}"
+
+if [ "${PULL:-0}" = "1" ]; then
+    docker pull -q "$IMAGE" >/dev/null || echo "manyeyes-docker: pull failed, starting the local image" >&2
+fi
+
+# A container left over from a crash still holds the name; --rm cleans it up
+# once it stops.
+docker stop -t 30 "$CONTAINER" >/dev/null 2>&1 || true
+
+set -- docker run --rm --name "$CONTAINER" \
+    --user "$(id -u):$(id -g)" \
+    --security-opt seccomp=unconfined \
+    --security-opt apparmor=unconfined \
+    --security-opt systempaths=unconfined \
+    -v "$DATA_DIR:/data"
+# Swap equals memory: the limit is a ceiling, not a hint. When it is hit, the
+# kernel kills one reviewer process; that reviewer fails, the job goes on.
+if [ -n "${MEMORY:-}" ]; then set -- "$@" --memory "$MEMORY" --memory-swap "$MEMORY"; fi
+if [ -n "${CPUS:-}" ]; then set -- "$@" --cpus "$CPUS"; fi
+for p in $PUBLISH; do set -- "$@" -p "$p"; done
+for f in server.env secrets.env; do
+    if [ -f "$DATA_DIR/$f" ]; then set -- "$@" --env-file "$DATA_DIR/$f"; fi
+done
+exec "$@" "$IMAGE" manyeyes serve

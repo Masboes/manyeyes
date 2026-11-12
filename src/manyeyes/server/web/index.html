@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script>
+    // Every URL in the UI is relative, so the page URL must end with a slash.
+    if (!location.pathname.endsWith("/")) location.replace(location.pathname + "/" + location.search + location.hash);
+  </script>
+  <meta name="theme-color" content="#FAFBFF" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0A0E2A" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <meta name="referrer" content="same-origin">
+  <meta name="manyeyes-version" content="__VERSION__">
+  <title>manyeyes</title>
+  <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
+  <link rel="preload" href="static/fonts/space-grotesk-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="static/fonts/plus-jakarta-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="static/style.css">
+  <script type="module" src="static/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div id="chrome"></div>
+  <main id="main" tabindex="-1">
+    <div class="page"><p class="loading">Loading</p></div>
+  </main>
+  <footer class="site-footer">
+    <div class="page">
+      <span class="t-meta">manyeyes <span class="t-num">__VERSION__</span></span>
+      <span class="t-meta">A self-hosted swarm of AI code reviewers.</span>
+    </div>
+  </footer>
+  <noscript><div class="page"><p>manyeyes needs JavaScript.</p></div></noscript>
+</body>
+</html>

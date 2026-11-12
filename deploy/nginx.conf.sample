@@ -1,0 +1,39 @@
+# nginx sample: serve manyeyes under a path prefix, here /manyeyes/.
+# Replace /manyeyes with your prefix and 127.0.0.1:8789 with the address of
+# the manyeyes container. TLS can terminate here or in front (for example
+# Cloudflare); X-Forwarded-Proto must say https either way.
+#
+# If nginx runs in Docker with nginx.conf bind-mounted as a single file, edit
+# the file in place: tools that write a new file (sed -i, many editors) change
+# the inode, and the container keeps the old file until it restarts.
+
+location = /manyeyes { return 301 /manyeyes/; }
+
+# "^~": a regex location elsewhere (for example one for *.js|*.css files)
+# would otherwise win and serve the UI's assets from the wrong place.
+location ^~ /manyeyes/ {
+    proxy_pass http://127.0.0.1:8789/;          # trailing slash: strips the prefix
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Prefix /manyeyes;
+    proxy_buffering off;                        # MCP streams progress
+    proxy_read_timeout 3600s;                   # reviews block for minutes
+}
+
+# MCP OAuth discovery lives at the ORIGIN root (RFC 9728 / RFC 8414), with
+# the resource path appended. Forward these two paths unchanged.
+location = /.well-known/oauth-protected-resource/manyeyes/mcp {
+    proxy_pass http://127.0.0.1:8789;           # no URI part: the path passes as is
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+}
+location = /.well-known/oauth-authorization-server/manyeyes/mcp {
+    proxy_pass http://127.0.0.1:8789;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+}

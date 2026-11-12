@@ -1,0 +1,30 @@
+# systemd --user unit for the manyeyes server.
+#
+#   install -m 755 deploy/manyeyes-docker ~/.local/bin/
+#   cp deploy/manyeyes.service ~/.config/systemd/user/
+#   $EDITOR ~/.config/manyeyes/deploy.env      # CONTAINER, IMAGE, DATA_DIR, PUBLISH
+#   systemctl --user daemon-reload && systemctl --user enable --now manyeyes
+#   loginctl enable-linger "$USER"             # keep it running after logout
+#
+# If your user services lack the docker group (it was added after the user
+# manager started), run Docker through sg in a drop-in
+# (~/.config/systemd/user/manyeyes.service.d/sg.conf):
+#   [Service]
+#   ExecStart=
+#   ExecStart=/usr/bin/sg docker -c %h/.local/bin/manyeyes-docker
+[Unit]
+Description=manyeyes server (Docker)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/manyeyes/deploy.env
+ExecStart=%h/.local/bin/manyeyes-docker
+Restart=always
+RestartSec=5
+# docker run forwards SIGTERM to the container; the server stops its jobs.
+TimeoutStopSec=45
+
+[Install]
+WantedBy=default.target
