@@ -27,8 +27,8 @@ import shutil
 import signal
 import time
 import uuid
-from collections.abc import Awaitable, Callable
-from contextlib import nullcontext
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -62,8 +62,9 @@ class _Proc:
         self.proc: asyncio.subprocess.Process | None = None
         self.kill_reason: Outcome | None = None
         self.kill_detail = ""   # failure_reason for this kill, when the default is wrong
+        self.stopped = asyncio.Event()   # set on the first kill: ends a wait for a slot
 
-    async def kill(self, reason: Outcome) -> None:
+    async def kill(self, reason: Outcome, detail: str = "") -> None:
         p = self.proc
         if p is not None and p.returncode is not None:
             # It exited on its own: keep its real result, but reap any child
@@ -74,7 +75,9 @@ class _Proc:
                 pass
             return
         if self.kill_reason is None:
-            self.kill_reason = reason
+            # The first reason wins, and its detail goes with it.
+            self.kill_reason, self.kill_detail = reason, detail
+        self.stopped.set()
         if p is None:
             return
         for sig, wait in ((signal.SIGTERM, KILL_GRACE_S), (signal.SIGKILL, KILL_GRACE_S)):
@@ -160,11 +163,37 @@ class Runner:
                  extra_ro: list[Path]) -> tuple[list[str], dict[str, str] | None]:
         return jailed_command(self.s, rev, rev.argv(prompt), workdir, extra_ro)
 
+    @asynccontextmanager
+    async def _slot(self, handle: _Proc) -> AsyncIterator[None]:
+        """Hold a reviewer slot. A kill ends the wait for one: a reviewer that is
+        killed or cancelled while queued returns at once, without a slot."""
+        if self.slots is None:
+            yield
+            return
+        acquire = asyncio.ensure_future(self.slots.acquire())
+        stop = asyncio.ensure_future(handle.stopped.wait())
+        held = False
+        try:
+            try:
+                await asyncio.wait({acquire, stop}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                stop.cancel()
+                if not acquire.done():
+                    acquire.cancel()
+                try:
+                    held = await acquire   # True when the slot came before the cancel
+                except asyncio.CancelledError:
+                    held = False
+            yield
+        finally:
+            if held:
+                self.slots.release()
+
     async def _run_one(self, rev: Reviewer, prompt: str, workdir: Path,
                        extra_ro: list[Path]) -> ReviewerRun:
         spec = rev.spec
         handle = self._procs[spec.name]
-        async with self.slots if self.slots is not None else nullcontext():
+        async with self._slot(handle):
             if self._cancelled or handle.kill_reason is not None:
                 now = time.time()
                 return ReviewerRun(spec, handle.kill_reason or Outcome.CANCELLED,
@@ -321,7 +350,9 @@ class Runner:
                 timeout = None
                 if grace_deadline is not None and not grace_over:
                     timeout = max(0.0, grace_deadline - time.monotonic())
-                elif spared - killed and spare_until is not None:
+                elif spare_until is not None and any(
+                        tasks[t].spec.name in spared and tasks[t].spec.name not in killed
+                        for t in pending):
                     timeout = max(0.0, spare_until - time.monotonic())
                 done, pending = await asyncio.wait(
                     pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
@@ -339,9 +370,13 @@ class Runner:
                         succeeded_kinds.add(rev.spec.kind)
                     await _emit(self.on_event, "reviewer_finished", {"run": run})
                 if grace_deadline is None and successes >= quorum and pending:
-                    grace_deadline = time.monotonic() + grace
+                    # The grace never runs past the time the synthesis needs.
+                    now = time.monotonic()
+                    grace_deadline = now + grace
+                    if spare_until is not None:
+                        grace_deadline = max(now, min(grace_deadline, spare_until))
                     await _emit(self.on_event, "quorum_reached",
-                                {"successes": successes, "grace_s": grace})
+                                {"successes": successes, "grace_s": grace_deadline - now})
                 if (grace_deadline is not None and not grace_over
                         and time.monotonic() >= grace_deadline):
                     grace_over = True
@@ -358,16 +393,15 @@ class Runner:
                     doomed = [tasks[t].spec.name for t in pending
                               if (tasks[t].spec.kind in succeeded_kinds or out_of_time)
                               and tasks[t].spec.name not in killed]
-                    for name in doomed:
-                        if name not in spared:
-                            continue
-                        self._procs[name].kill_detail = (
-                            "straggler kill: no time left before the job deadline"
-                            if out_of_time and kind_of[name] not in succeeded_kinds
-                            else "straggler kill: another reviewer of its family succeeded")
+                    details = {
+                        name: "" if name not in spared
+                        else "straggler kill: another reviewer of its family succeeded"
+                        if kind_of[name] in succeeded_kinds
+                        else "straggler kill: no time left before the job deadline"
+                        for name in doomed}
                     killed.update(doomed)
-                    await asyncio.gather(*(self._procs[name].kill(Outcome.STRAGGLER_KILLED)
-                                           for name in doomed))
+                    await asyncio.gather(*(self._procs[name].kill(
+                        Outcome.STRAGGLER_KILLED, details[name]) for name in doomed))
         except asyncio.CancelledError:
             await self.cancel()
             for t in pending:

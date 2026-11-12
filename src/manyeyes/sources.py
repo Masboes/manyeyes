@@ -297,8 +297,9 @@ async def prepare_context(items: list[str] | None, cache_root: Path, dest_root: 
             except RefNotFound as e:
                 raise SourceError(f"{repo}: {e}") from e
             except SourceError as e:
-                raise SourceError(f"{repo}: cannot fetch {ref!r} (network or access "
-                                  f"error)") from e
+                # git's own words, without the command (it names a local path).
+                cause = str(e).split(" failed: ", 1)[-1].strip()[-200:]
+                raise SourceError(f"{repo}: cannot fetch {ref!r}: {cause}") from e
             sha = await _run(["git", "-C", str(cache), "rev-parse", "refs/manyeyes/fetched"],
                              env, timeout)
             # Keep recent commits reachable for jobs still reading them; drop older ones.
@@ -444,7 +445,8 @@ async def _run(argv: list[str], env: dict[str, str], timeout: float,
 HTTP_4XX_RE = re.compile(r"returned error: 4\d\d|HTTP 4\d\d")
 NET_ERROR_RE = re.compile(
     r"returned error: 5\d\d|HTTP 5\d\d|Could not resolve host|Failed to connect"
-    r"|Connection reset|Connection timed out|early EOF|remote end hung up unexpectedly")
+    r"|Connection reset|Connection refused|Connection timed out|early EOF"
+    r"|remote end hung up unexpectedly|unexpected disconnect|SSL|TLS|gnutls")
 
 
 async def _run_net(argv: list[str], env: dict[str, str], timeout: float) -> str:
@@ -480,7 +482,7 @@ async def _fetch_branch_or_commit(repo_dir: Path, env: dict[str, str], timeout: 
     except SourceError as e:
         if "couldn't find remote ref" not in str(e):
             raise
-        if not SHA_RE.match(name):
+        if not SHA_RE.fullmatch(name):
             raise RefNotFound(f"no branch {name!r} (tags are not supported)") from e
     sha = name.lower()
     if len(sha) == 40:
@@ -497,9 +499,14 @@ async def _fetch_branch_or_commit(repo_dir: Path, env: dict[str, str], timeout: 
                        env, timeout)
         full = ""
     try:
-        full = await _run(["git", "-C", str(repo_dir), "rev-parse", "--verify", "--quiet",
+        full = await _run(["git", "-C", str(repo_dir), "rev-parse", "--verify",
                            "--end-of-options", f"{full or sha}^{{commit}}"], env, timeout)
     except SourceError as e:
+        msg = str(e)
+        if "timed out" in msg:
+            raise
+        if "ambiguous" in msg:
+            raise RefNotFound(f"short SHA {name!r} is ambiguous; pass more characters") from e
         hint = "" if full else " on any branch (pass the full 40-character SHA)"
         raise RefNotFound(f"{name!r} is not a branch, and not a commit{hint}") from e
     await _run(["git", "-C", str(repo_dir), "update-ref", commit_ref, full], env, timeout)
