@@ -13,6 +13,12 @@ from pathlib import Path
 from ..models import Usage
 from .base import Parsed, Reviewer
 
+# How a command fails when Codex's own sandbox cannot start, for example
+# "bwrap: execvp codex-linux-sandbox: No such file or directory" (Codex 0.167+ does not
+# create that helper when its home is under /tmp) or "bwrap: No permissions to create
+# new namespace".
+SANDBOX_BROKEN = "bwrap: "
+
 
 class CodexReviewer(Reviewer):
     kind = "codex"
@@ -61,6 +67,7 @@ class CodexReviewer(Reviewer):
     def parse(self, stdout: str, stderr: str) -> Parsed:
         out = Parsed()
         errors: list[str] = []
+        cmd_ok, blind_output = 0, ""
         for line in stdout.splitlines():
             line = line.strip()
             if not line.startswith("{"):
@@ -71,6 +78,12 @@ class CodexReviewer(Reviewer):
                 continue
             etype = ev.get("type", "")
             item = ev.get("item") or {}
+            if etype == "item.completed" and item.get("type") == "command_execution":
+                output = str(item.get("aggregated_output") or "").lstrip()
+                if item.get("exit_code") not in (0, None) and output.startswith(SANDBOX_BROKEN):
+                    blind_output = blind_output or output.splitlines()[0][:200]
+                else:          # it ran, whatever its exit code (git diff --exit-code: 1)
+                    cmd_ok += 1
             if item.get("type") == "agent_message" or etype == "agent_message":
                 text = item.get("text") or ev.get("text")
                 if text:
@@ -88,5 +101,13 @@ class CodexReviewer(Reviewer):
                 msg = (err.get("message") if isinstance(err, dict) else None) \
                     or ev.get("message") or json.dumps(ev)[:500]
                 errors.append(str(msg))
+        if blind_output and not cmd_ok:
+            # Not one command ran, so Codex never saw the code; its "review" only
+            # says so. Never count that as a review.
+            out.review = ""
+            hint = (" Its home is probably under /tmp: keep data_dir outside /tmp."
+                    if "codex-linux-sandbox" in blind_output else "")
+            errors.insert(0, f"codex could not run any command, its sandbox failed: "
+                             f"{blind_output}.{hint}")
         out.error_text = "\n".join(errors)
         return out

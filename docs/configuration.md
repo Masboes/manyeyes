@@ -25,7 +25,7 @@ straggler_grace_s = 90
 
 | Key | Environment | Default | Web UI | Meaning |
 |---|---|---|---|---|
-| `data_dir` | `MANYEYES_DATA_DIR` | `~/.manyeyes` |  | Database, runs, secrets file and auth homes. |
+| `data_dir` | `MANYEYES_DATA_DIR` | `~/.manyeyes` |  | Database, runs, secrets file and auth homes. Keep it outside /tmp: Codex refuses to run its sandbox from there. |
 | `auth_dir` | `MANYEYES_AUTH_DIR` | — |  | Reviewer login homes (`codex/`, `claude/`). Default `<data_dir>/auth`. |
 | `roster` | `MANYEYES_ROSTER` | `codex:8,claude:2` | yes | Reviewers for a full run (the default mode). |
 | `roster_quick` | `MANYEYES_ROSTER_QUICK` | `codex:4,claude:1` | yes | Reviewers for a quick run (`mode=quick`, `--quick`): fewer and faster, for iterating. |
