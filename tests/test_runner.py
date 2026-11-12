@@ -61,6 +61,8 @@ async def test_straggler_kill_spares_a_family_without_a_success(settings, tmp_pa
     assert o["codex#5"].duration_s < 3   # killed at the end of the grace, not later
     assert o["claude#1"].outcome == Outcome.SUCCESS
     assert o["claude#2"].outcome == Outcome.STRAGGLER_KILLED
+    assert "family succeeded" in o["claude#2"].failure_reason
+    assert "grace" in o["codex#5"].failure_reason
     assert o["claude#2"].finished_at >= o["claude#1"].finished_at
     assert o["claude#2"].duration_s < 10
 
@@ -79,6 +81,28 @@ async def test_family_with_a_success_is_killed_as_before(settings, tmp_path, cla
     o = {r.spec.name: r for r in res.runs}
     assert o["codex#2"].outcome == o["claude#2"].outcome == Outcome.STRAGGLER_KILLED
     assert max(o["codex#2"].duration_s, o["claude#2"].duration_s) < 10
+
+
+async def test_spared_reviewer_is_killed_in_time_for_the_job_deadline(settings, tmp_path,
+                                                                     claude_login):
+    # The job deadline is close: the spared claude reviewer must go before its
+    # own 20 s timeout, so the job keeps the codex reviews.
+    import time
+
+    from manyeyes.engine import runner as runner_mod
+    s = settings.with_layer("test", {"limits.quorum_fraction": 0.5})
+    r = Runner(s)
+    old = runner_mod.DEADLINE_MARGIN_S
+    runner_mod.DEADLINE_MARGIN_S = 0.0
+    try:
+        res = await r.run(SparTask("q"), build_specs("codex:2@ok,claude:1@hang", s), tmp_path,
+                          deadline=time.monotonic() + 4)
+    finally:
+        runner_mod.DEADLINE_MARGIN_S = old
+    o = {x.spec.name: x for x in res.runs}
+    assert o["claude#1"].outcome == Outcome.STRAGGLER_KILLED
+    assert "job deadline" in o["claude#1"].failure_reason
+    assert o["claude#1"].duration_s < 10
 
 
 async def test_failures_do_not_arm_the_straggler_timer(settings, tmp_path):

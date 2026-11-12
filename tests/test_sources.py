@@ -201,7 +201,7 @@ async def test_clone_review_prefers_a_branch_that_looks_like_hex(repo, tmp_path,
 async def test_clone_review_unknown_short_sha(repo, tmp_path, monkeypatch):
     from manyeyes import sources
     _bare_remote(repo, tmp_path, monkeypatch, "https://github.com/x/y.git")
-    with pytest.raises(SourceError, match="short SHA"):
+    with pytest.raises(sources.RefNotFound, match="not a commit on any branch"):
         await sources.clone_review("x/y", tmp_path / "clone", token="", timeout=60,
                                    head="abcdef0", base="main")
 
@@ -286,3 +286,58 @@ async def test_resolve_pr_does_not_retry_4xx(monkeypatch):
     with pytest.raises(SourceError, match="404"):
         await sources.resolve_pr("o/r", 7, "")
     assert len(seen) == 1
+
+
+async def test_clone_review_base_named_like_the_internal_head_ref(repo, tmp_path, monkeypatch):
+    from manyeyes import sources
+    git(repo, "branch", "manyeyes-head", "main")
+    _bare_remote(repo, tmp_path, monkeypatch, "https://github.com/x/y.git")
+    task = await sources.clone_review("x/y", tmp_path / "clone", token="", timeout=60,
+                                      head="feature", base="manyeyes-head")
+    assert (task.head_sha, task.base_sha) == (_sha(repo, "feature"), _sha(repo, "main"))
+
+
+async def test_clone_review_full_sha_of_a_tree_is_refused(repo, tmp_path, monkeypatch):
+    from manyeyes import sources
+    _bare_remote(repo, tmp_path, monkeypatch, "https://github.com/x/y.git")
+    with pytest.raises(sources.RefNotFound, match="not a commit"):
+        await sources.clone_review("x/y", tmp_path / "clone", token="", timeout=60,
+                                   head=_sha(repo, "feature^{tree}"), base="main")
+
+
+async def test_unknown_branch_is_a_clean_error(repo, tmp_path, monkeypatch):
+    from manyeyes import sources
+    _bare_remote(repo, tmp_path, monkeypatch, "https://github.com/x/y.git")
+    with pytest.raises(sources.RefNotFound, match="no branch 'nope'"):
+        await sources.clone_review("x/y", tmp_path / "clone", token="", timeout=60,
+                                   head="nope", base="main")
+
+
+async def test_git_4xx_is_not_retried_even_with_a_network_word(monkeypatch):
+    from manyeyes import sources
+    monkeypatch.setattr(sources, "RETRY_DELAYS_S", (0.0, 0.0))
+    calls = []
+
+    async def bad(argv, env, timeout, ok_codes=(0,)):
+        calls.append(argv)
+        raise SourceError("error: RPC failed; HTTP 400 curl 22\n"
+                          "fatal: the remote end hung up unexpectedly")
+    monkeypatch.setattr(sources, "_run", bad)
+    with pytest.raises(SourceError):
+        await sources._run_net(["git", "fetch"], {}, 5)
+    assert len(calls) == 1
+
+
+async def test_resolve_pr_does_not_retry_a_timeout(monkeypatch):
+    import httpx
+
+    from manyeyes import sources
+    seen = _github(monkeypatch, [httpx.ReadTimeout("slow"), 200])
+    with pytest.raises(SourceError, match="cannot reach GitHub"):
+        await sources.resolve_pr("o/r", 7, "")
+    assert len(seen) == 1
+
+
+def test_git_runs_with_english_messages():
+    from manyeyes.sources import git_auth_env
+    assert git_auth_env("")["LC_ALL"] == "C"

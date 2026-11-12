@@ -85,7 +85,8 @@ async def run_job(store: Store, settings: Settings, job: dict[str, Any], task: T
                          error=f"job timeout: no time left after preparing the code ({int(limit)}s)")
         raise TimeoutError
     try:
-        result = await asyncio.wait_for(runner.run(task, specs, workdir, extra_ro=extra_ro),
+        result = await asyncio.wait_for(runner.run(task, specs, workdir, extra_ro=extra_ro,
+                                                   deadline=time.monotonic() + remaining),
                                         timeout=remaining)
     except TimeoutError:
         store.update_job(job_id, status="failed", finished_at=time.time(),

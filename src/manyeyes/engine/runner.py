@@ -13,7 +13,9 @@ the grace runs out, a reviewer whose family has no successful review yet is
 not killed: agreement across families is the strongest signal, so one review
 of each family is worth the wait. Such a reviewer runs on until its own
 timeout (`reviewer_timeout_s`), or until a reviewer of its family succeeds;
-then the rest of that family is killed at once.
+then the rest of that family is killed at once. When the caller gives a job
+deadline, a spared reviewer is also killed in time to leave the synthesis its
+full budget, so a long wait never costs the reviews already done.
 """
 from __future__ import annotations
 
@@ -44,6 +46,9 @@ log = logging.getLogger("manyeyes.runner")
 EventFn = Callable[[str, dict[str, Any]], Awaitable[None] | None]
 KILL_GRACE_S = 3.0
 DRAIN_S = 5.0
+# Room kept before the job deadline, on top of the synthesis timeout: the
+# kill itself, the result rendering and the store writes.
+DEADLINE_MARGIN_S = 30.0
 
 
 class SwarmError(RuntimeError):
@@ -56,6 +61,7 @@ class _Proc:
     def __init__(self) -> None:
         self.proc: asyncio.subprocess.Process | None = None
         self.kill_reason: Outcome | None = None
+        self.kill_detail = ""   # failure_reason for this kill, when the default is wrong
 
     async def kill(self, reason: Outcome) -> None:
         p = self.proc
@@ -238,7 +244,7 @@ class Runner:
         reason = handle.kill_reason
         if reason is not None:
             run.outcome = reason
-            run.failure_reason = {
+            run.failure_reason = handle.kill_detail or {
                 Outcome.TIMEOUT: f"timeout after {int(timeout)}s",
                 Outcome.STRAGGLER_KILLED: "straggler kill: quorum reached, grace "
                                           f"of {self.s['limits.straggler_grace_s']}s ran out",
@@ -271,7 +277,10 @@ class Runner:
         await asyncio.gather(*(p.kill(Outcome.CANCELLED) for p in self._procs.values()))
 
     async def run(self, task: Task, specs: list[ReviewerSpec], workdir: Path,
-                  extra_ro: list[Path] | None = None) -> SwarmResult:
+                  extra_ro: list[Path] | None = None,
+                  deadline: float | None = None) -> SwarmResult:
+        """`deadline` (time.monotonic) is the job's own limit; spared stragglers
+        are killed in time for the synthesis to finish before it."""
         if not specs:
             raise SwarmError("no reviewers")
         if self.use_jail and not jail_mod.bwrap_path():
@@ -289,6 +298,10 @@ class Runner:
         n = len(specs)
         quorum = max(1, math.ceil(float(self.s["limits.quorum_fraction"]) * n))
         grace = float(self.s["limits.straggler_grace_s"])
+        spare_until: float | None = None
+        if deadline is not None:
+            synth_s = float(self.s["limits.synth_timeout_s"]) if self.s["synth.enabled"] else 0.0
+            spare_until = deadline - synth_s - DEADLINE_MARGIN_S
         await _emit(self.on_event, "swarm_started",
                     {"reviewers": [s.name for s in specs], "quorum": quorum})
 
@@ -301,11 +314,15 @@ class Runner:
         killed: set[str] = set()
         grace_deadline: float | None = None
         grace_over = False
+        spared: set[str] = set()
+        kind_of = {s.name: s.kind for s in specs}
         try:
             while pending:
                 timeout = None
                 if grace_deadline is not None and not grace_over:
                     timeout = max(0.0, grace_deadline - time.monotonic())
+                elif spared - killed and spare_until is not None:
+                    timeout = max(0.0, spare_until - time.monotonic())
                 done, pending = await asyncio.wait(
                     pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
                 for t in done:
@@ -328,18 +345,26 @@ class Runner:
                 if (grace_deadline is not None and not grace_over
                         and time.monotonic() >= grace_deadline):
                     grace_over = True
-                    spared = sorted(tasks[t].spec.name for t in pending
-                                    if tasks[t].spec.kind not in succeeded_kinds)
+                    spared = {tasks[t].spec.name for t in pending
+                              if tasks[t].spec.kind not in succeeded_kinds}
                     if spared:
                         log.info("grace over; %s keep running: no review of their "
-                                 "family has succeeded yet", ", ".join(spared))
+                                 "family has succeeded yet", ", ".join(sorted(spared)))
                 if grace_over:
                     # Kill the stragglers of every family that has a success. A
                     # spared family joins here as soon as one of its reviewers
-                    # succeeds.
+                    # succeeds. At the spare limit, the spared ones go too.
+                    out_of_time = spare_until is not None and time.monotonic() >= spare_until
                     doomed = [tasks[t].spec.name for t in pending
-                              if tasks[t].spec.kind in succeeded_kinds
+                              if (tasks[t].spec.kind in succeeded_kinds or out_of_time)
                               and tasks[t].spec.name not in killed]
+                    for name in doomed:
+                        if name not in spared:
+                            continue
+                        self._procs[name].kill_detail = (
+                            "straggler kill: no time left before the job deadline"
+                            if out_of_time and kind_of[name] not in succeeded_kinds
+                            else "straggler kill: another reviewer of its family succeeded")
                     killed.update(doomed)
                     await asyncio.gather(*(self._procs[name].kill(Outcome.STRAGGLER_KILLED)
                                            for name in doomed))
