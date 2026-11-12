@@ -156,3 +156,133 @@ def test_eviction_skips_busy_and_recent(tmp_path):
     fcntl.flock(held, fcntl.LOCK_EX)
     assert evict_context_cache(tmp_path, 14 * 86400) == ["a/old"]
     held.close()
+
+
+def _bare_remote(repo: Path, tmp_path: Path, monkeypatch, url: str) -> Path:
+    """A bare "remote" served over the file protocol stands in for GitHub."""
+    from manyeyes import sources
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(remote)], check=True)
+    git(remote, "config", "uploadpack.allowFilter", "true")
+    real_run = sources._run
+
+    async def fake_run(argv, env, timeout, ok_codes=(0,)):
+        argv = [str(remote) if a == url else a for a in argv]
+        return await real_run(argv, env, timeout, ok_codes)
+    monkeypatch.setattr(sources, "_run", fake_run)
+    return remote
+
+
+def _sha(repo: Path, ref: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", ref], capture_output=True,
+                          text=True, check=True).stdout.strip()
+
+
+@pytest.mark.parametrize("head_len,base_len", [(40, 9), (9, 40), (7, 7)])
+async def test_clone_review_accepts_commit_shas(repo, tmp_path, monkeypatch, head_len, base_len):
+    from manyeyes import sources
+    _bare_remote(repo, tmp_path, monkeypatch, "https://github.com/x/y.git")
+    head, base = _sha(repo, "feature"), _sha(repo, "main")
+    task = await sources.clone_review("x/y", tmp_path / "clone", token="", timeout=60,
+                                      head=head[:head_len], base=base[:base_len])
+    assert (task.head_sha, task.base_sha) == (head, base)
+    assert task.base_ref == base[:base_len]          # no "origin/" for a commit
+
+
+async def test_clone_review_prefers_a_branch_that_looks_like_hex(repo, tmp_path, monkeypatch):
+    from manyeyes import sources
+    git(repo, "branch", "deadbeef", "feature")
+    _bare_remote(repo, tmp_path, monkeypatch, "https://github.com/x/y.git")
+    task = await sources.clone_review("x/y", tmp_path / "clone", token="", timeout=60,
+                                      head="deadbeef", base="main")
+    assert task.head_sha == _sha(repo, "feature") and task.base_ref == "origin/main"
+
+
+async def test_clone_review_unknown_short_sha(repo, tmp_path, monkeypatch):
+    from manyeyes import sources
+    _bare_remote(repo, tmp_path, monkeypatch, "https://github.com/x/y.git")
+    with pytest.raises(SourceError, match="short SHA"):
+        await sources.clone_review("x/y", tmp_path / "clone", token="", timeout=60,
+                                   head="abcdef0", base="main")
+
+
+async def test_context_repo_at_a_commit(repo, tmp_path, monkeypatch):
+    from manyeyes import sources
+    _bare_remote(repo, tmp_path, monkeypatch, "https://github.com/acme/lib.git")
+    sha = _sha(repo, "main")
+    for ref in (sha, sha[:8]):
+        ((_, got_ref, got_sha, path),) = await sources.prepare_context(
+            [f"acme/lib@{ref}"], tmp_path / "cache", tmp_path / f"job-{len(ref)}",
+            token="", timeout=60)
+        assert (got_ref, got_sha) == (ref, sha)
+        assert (Path(path) / "a.py").read_text() == "x = 1\n"
+
+
+async def test_git_network_error_is_retried_once(monkeypatch):
+    from manyeyes import sources
+    monkeypatch.setattr(sources, "RETRY_DELAYS_S", (0.0, 0.0))
+    calls = []
+
+    async def flaky(argv, env, timeout, ok_codes=(0,)):
+        calls.append(argv)
+        if len(calls) == 1:
+            raise SourceError("git fetch failed: The requested URL returned error: 503")
+        return "ok"
+    monkeypatch.setattr(sources, "_run", flaky)
+    assert await sources._run_net(["git", "fetch"], {}, 5) == "ok" and len(calls) == 2
+
+    calls.clear()
+
+    async def denied(argv, env, timeout, ok_codes=(0,)):
+        calls.append(argv)
+        raise SourceError("git fetch failed: The requested URL returned error: 403")
+    monkeypatch.setattr(sources, "_run", denied)
+    with pytest.raises(SourceError, match="403"):
+        await sources._run_net(["git", "fetch"], {}, 5)
+    assert len(calls) == 1
+
+
+def _github(monkeypatch, responses):
+    """resolve_pr talks to a fake GitHub that answers `responses` in order."""
+    import httpx
+
+    from manyeyes import sources
+    monkeypatch.setattr(sources, "RETRY_DELAYS_S", (0.0, 0.0))
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        r = responses[len(seen) - 1]
+        if isinstance(r, Exception):
+            raise r
+        return httpx.Response(r, json={"head": {"ref": "f", "repo": {"full_name": "o/r"}},
+                                       "base": {"ref": "main"}})
+    real = httpx.AsyncClient
+    monkeypatch.setattr(sources.httpx, "AsyncClient",
+                        lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    return seen
+
+
+async def test_resolve_pr_retries_5xx_and_connection_errors(monkeypatch):
+    import httpx
+
+    from manyeyes import sources
+    seen = _github(monkeypatch, [503, httpx.ConnectError("boom"), 200])
+    assert await sources.resolve_pr("o/r", 7, "") == ("f", "main")
+    assert len(seen) == 3
+
+
+async def test_resolve_pr_gives_up_after_two_retries(monkeypatch):
+    from manyeyes import sources
+    seen = _github(monkeypatch, [502, 503, 504])
+    with pytest.raises(SourceError, match="504"):
+        await sources.resolve_pr("o/r", 7, "")
+    assert len(seen) == 3
+
+
+async def test_resolve_pr_does_not_retry_4xx(monkeypatch):
+    from manyeyes import sources
+    seen = _github(monkeypatch, [404])
+    with pytest.raises(SourceError, match="404"):
+        await sources.resolve_pr("o/r", 7, "")
+    assert len(seen) == 1

@@ -15,15 +15,16 @@ FAKES = Path(__file__).parent / "fakes"
 
 @pytest.fixture
 def fake_bin(tmp_path: Path) -> Path:
-    """A directory with an executable `codex` that runs the fake."""
+    """A directory with executables `codex` and `claude` that run the fakes."""
     d = tmp_path / "bin"
     d.mkdir()
-    exe = d / "codex"
     # System Python when present: the jail hides virtualenvs outside /usr.
     py = "/usr/bin/python3" if Path("/usr/bin/python3").exists() else sys.executable
-    body = (FAKES / "fake_codex.py").read_text().split("\n", 1)[1]
-    exe.write_text(f"#!{py}\n{body}")
-    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    for kind in ("codex", "claude"):
+        exe = d / kind
+        body = (FAKES / f"fake_{kind}.py").read_text().split("\n", 1)[1]
+        exe.write_text(f"#!{py}\n{body}")
+        exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
     return d
 
 
@@ -35,6 +36,7 @@ def settings(tmp_path: Path, fake_bin: Path) -> Settings:
     s = load(env={"MANYEYES_DATA_DIR": str(data), "PATH": os.environ["PATH"]})
     return s.with_layer("flag", {
         "reviewers.codex.bin": str(fake_bin / "codex"),
+        "reviewers.claude.bin": str(fake_bin / "claude"),
         "jail.enabled": False,
         "synth.enabled": False,
         "update.check": False,

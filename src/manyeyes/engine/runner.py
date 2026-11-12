@@ -7,6 +7,13 @@ Straggler policy: only successful reviews count toward quorum
 (ceil(quorum_fraction x N)). Once quorum is reached, the reviewers still
 running get `straggler_grace_s`, then they are killed. Failures never arm the
 timer, so a burst of fast failures cannot cut short the reviewers that work.
+
+The kill is family-aware (a family is a reviewer kind: codex, claude). When
+the grace runs out, a reviewer whose family has no successful review yet is
+not killed: agreement across families is the strongest signal, so one review
+of each family is worth the wait. Such a reviewer runs on until its own
+timeout (`reviewer_timeout_s`), or until a reviewer of its family succeeds;
+then the rest of that family is killed at once.
 """
 from __future__ import annotations
 
@@ -290,12 +297,14 @@ class Runner:
         results: dict[str, ReviewerRun] = {}
         pending = set(tasks)
         successes = 0
+        succeeded_kinds: set[str] = set()
+        killed: set[str] = set()
         grace_deadline: float | None = None
-        stragglers_killed = False
+        grace_over = False
         try:
             while pending:
                 timeout = None
-                if grace_deadline is not None and not stragglers_killed:
+                if grace_deadline is not None and not grace_over:
                     timeout = max(0.0, grace_deadline - time.monotonic())
                 done, pending = await asyncio.wait(
                     pending, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
@@ -309,16 +318,31 @@ class Runner:
                                           finished_at=now, failure_reason=f"engine error: {e!r}")
                     results[rev.spec.name] = run
                     successes += run.ok
+                    if run.ok:
+                        succeeded_kinds.add(rev.spec.kind)
                     await _emit(self.on_event, "reviewer_finished", {"run": run})
                 if grace_deadline is None and successes >= quorum and pending:
                     grace_deadline = time.monotonic() + grace
                     await _emit(self.on_event, "quorum_reached",
                                 {"successes": successes, "grace_s": grace})
-                if (grace_deadline is not None and pending and not stragglers_killed
+                if (grace_deadline is not None and not grace_over
                         and time.monotonic() >= grace_deadline):
-                    stragglers_killed = True
-                    await asyncio.gather(*(self._procs[tasks[t].spec.name].kill(
-                        Outcome.STRAGGLER_KILLED) for t in pending))
+                    grace_over = True
+                    spared = sorted(tasks[t].spec.name for t in pending
+                                    if tasks[t].spec.kind not in succeeded_kinds)
+                    if spared:
+                        log.info("grace over; %s keep running: no review of their "
+                                 "family has succeeded yet", ", ".join(spared))
+                if grace_over:
+                    # Kill the stragglers of every family that has a success. A
+                    # spared family joins here as soon as one of its reviewers
+                    # succeeds.
+                    doomed = [tasks[t].spec.name for t in pending
+                              if tasks[t].spec.kind in succeeded_kinds
+                              and tasks[t].spec.name not in killed]
+                    killed.update(doomed)
+                    await asyncio.gather(*(self._procs[name].kill(Outcome.STRAGGLER_KILLED)
+                                           for name in doomed))
         except asyncio.CancelledError:
             await self.cancel()
             for t in pending:

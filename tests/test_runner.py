@@ -42,6 +42,45 @@ async def test_straggler_killed_after_quorum(settings, tmp_path):
     assert res.status == "done" and res.partial
 
 
+@pytest.fixture
+def claude_login(settings):
+    """A fake Claude login, so the fake `claude` CLI can run as a reviewer."""
+    (settings.auth_dir / "claude").mkdir(parents=True, exist_ok=True)
+    (settings.auth_dir / "claude" / ".credentials.json").write_text("{}")
+
+
+async def test_straggler_kill_spares_a_family_without_a_success(settings, tmp_path, claude_login):
+    # Quorum 4 of 5 comes from codex alone. The two claude reviewers are still
+    # running when the 1 s grace ends: they are spared, because claude has no
+    # success yet. The first claude success then ends the other claude run.
+    res = await run(settings, "codex:4@ok,codex:1@hang,claude:1@slow-3,claude:1@hang", tmp_path,
+                    **{"limits.quorum_fraction": 0.5})
+    o = {r.spec.name: r for r in res.runs}
+    assert [o[f"codex#{i}"].outcome for i in range(1, 5)] == [Outcome.SUCCESS] * 4
+    assert o["codex#5"].outcome == Outcome.STRAGGLER_KILLED
+    assert o["codex#5"].duration_s < 3   # killed at the end of the grace, not later
+    assert o["claude#1"].outcome == Outcome.SUCCESS
+    assert o["claude#2"].outcome == Outcome.STRAGGLER_KILLED
+    assert o["claude#2"].finished_at >= o["claude#1"].finished_at
+    assert o["claude#2"].duration_s < 10
+
+
+async def test_spared_family_runs_to_its_timeout(settings, tmp_path, claude_login):
+    # No claude reviewer ever succeeds: the spared one ends at its own timeout.
+    res = await run(settings, "codex:2@ok,claude:1@hang", tmp_path,
+                    **{"limits.quorum_fraction": 0.5, "limits.reviewer_timeout_s": 3})
+    o = {r.spec.name: r for r in res.runs}
+    assert o["claude#1"].outcome == Outcome.TIMEOUT
+
+
+async def test_family_with_a_success_is_killed_as_before(settings, tmp_path, claude_login):
+    res = await run(settings, "codex:1@ok,claude:1@ok,codex:1@hang,claude:1@hang", tmp_path,
+                    **{"limits.quorum_fraction": 0.5})
+    o = {r.spec.name: r for r in res.runs}
+    assert o["codex#2"].outcome == o["claude#2"].outcome == Outcome.STRAGGLER_KILLED
+    assert max(o["codex#2"].duration_s, o["claude#2"].duration_s) < 10
+
+
 async def test_failures_do_not_arm_the_straggler_timer(settings, tmp_path):
     # Three fast rate-limit failures: quorum (4 of 5) becomes impossible, so
     # the two slow reviewers must run to completion, not be killed.
