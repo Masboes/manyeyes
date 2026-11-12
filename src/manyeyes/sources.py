@@ -298,7 +298,9 @@ async def prepare_context(items: list[str] | None, cache_root: Path, dest_root: 
                 raise SourceError(f"{repo}: {e}") from e
             except SourceError as e:
                 # git's own words, without the command (it names a local path).
-                cause = str(e).split(" failed: ", 1)[-1].strip()[-200:]
+                msg = str(e)
+                cause = ("timed out" if msg.startswith("timed out")
+                         else msg.split(" failed: ", 1)[-1].strip()[-200:])
                 raise SourceError(f"{repo}: cannot fetch {ref!r}: {cause}") from e
             sha = await _run(["git", "-C", str(cache), "rev-parse", "refs/manyeyes/fetched"],
                              env, timeout)
@@ -446,7 +448,8 @@ HTTP_4XX_RE = re.compile(r"returned error: 4\d\d|HTTP 4\d\d")
 NET_ERROR_RE = re.compile(
     r"returned error: 5\d\d|HTTP 5\d\d|Could not resolve host|Failed to connect"
     r"|Connection reset|Connection refused|Connection timed out|early EOF"
-    r"|remote end hung up unexpectedly|unexpected disconnect|SSL|TLS|gnutls")
+    r"|remote end hung up unexpectedly|unexpected disconnect|gnutls_handshake"
+    r"|SSL_ERROR_SYSCALL|SSL_connect|TLS connection was non-properly terminated")
 
 
 async def _run_net(argv: list[str], env: dict[str, str], timeout: float) -> str:
@@ -454,7 +457,9 @@ async def _run_net(argv: list[str], env: dict[str, str], timeout: float) -> str:
     try:
         return await _run(argv, env, timeout)
     except SourceError as e:
-        if HTTP_4XX_RE.search(str(e)) or not NET_ERROR_RE.search(str(e)):
+        msg = str(e)
+        if ("couldn't find remote ref" in msg or HTTP_4XX_RE.search(msg)
+                or not NET_ERROR_RE.search(msg)):
             raise
     await asyncio.sleep(RETRY_DELAYS_S[0])
     return await _run(argv, env, timeout)
@@ -582,7 +587,9 @@ async def _clone(repo: str, dest: Path, env: dict[str, str], timeout: float, pr:
     await _run(["git", "-C", str(dest), "diff", "--no-ext-diff", "--no-textconv", "--patch",
                 "--output=/dev/null", base_sha, "HEAD"], env, timeout)
     label = f"{repo}#{pr}" if pr is not None else f"{repo}@{head}"
-    base_label = f"origin/{base}" if base_ref.startswith("refs/remotes/") else base
+    # A commit base shows as its full SHA: a short one can turn ambiguous later.
+    base_label = (f"origin/{base}" if base_ref.startswith("refs/remotes/") else
+                  await _run(["git", "-C", str(dest), "rev-parse", base_ref], env, timeout))
     return ReviewTask(label=label, base_ref=base_label, base_sha=base_sha,
                       head_ref=head if pr is None else f"PR #{pr} ({head})",
                       head_sha=head_sha, instructions=instructions)

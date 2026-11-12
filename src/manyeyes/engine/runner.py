@@ -183,6 +183,9 @@ class Runner:
                 try:
                     held = await acquire   # True when the slot came before the cancel
                 except asyncio.CancelledError:
+                    task = asyncio.current_task()
+                    if task is not None and task.cancelling():
+                        raise   # our own task was cancelled: never swallow that
                     held = False
             yield
         finally:
@@ -197,13 +200,13 @@ class Runner:
             if self._cancelled or handle.kill_reason is not None:
                 now = time.time()
                 return ReviewerRun(spec, handle.kill_reason or Outcome.CANCELLED,
-                                   failure_reason="cancelled before start",
+                                   failure_reason=handle.kill_detail or "cancelled before start",
                                    started_at=now, finished_at=now)
             await asyncio.sleep(rev.start_delay)
             if self._cancelled or handle.kill_reason is not None:
                 now = time.time()
                 return ReviewerRun(spec, handle.kill_reason or Outcome.CANCELLED,
-                                   failure_reason="cancelled before start",
+                                   failure_reason=handle.kill_detail or "cancelled before start",
                                    started_at=now, finished_at=now)
             started = time.time()
             await _emit(self.on_event, "reviewer_started",

@@ -186,7 +186,21 @@ async def test_clone_review_accepts_commit_shas(repo, tmp_path, monkeypatch, hea
     task = await sources.clone_review("x/y", tmp_path / "clone", token="", timeout=60,
                                       head=head[:head_len], base=base[:base_len])
     assert (task.head_sha, task.base_sha) == (head, base)
-    assert task.base_ref == base[:base_len]          # no "origin/" for a commit
+    assert task.base_ref == base          # the full SHA, no "origin/" for a commit
+
+
+async def test_commit_base_label_is_the_given_commit_not_the_merge_base(repo, tmp_path,
+                                                                         monkeypatch):
+    from manyeyes import sources
+    git(repo, "checkout", "-q", "main")
+    (repo / "b.py").write_text("y = 1\n")
+    git(repo, "add", "b.py")
+    git(repo, "commit", "-qm", "main moves on")
+    _bare_remote(repo, tmp_path, monkeypatch, "https://github.com/x/y.git")
+    base = _sha(repo, "main")
+    task = await sources.clone_review("x/y", tmp_path / "clone", token="", timeout=60,
+                                      head="feature", base=base[:8])
+    assert task.base_ref == base and task.base_sha == _sha(repo, "main~1")
 
 
 async def test_clone_review_prefers_a_branch_that_looks_like_hex(repo, tmp_path, monkeypatch):
