@@ -102,6 +102,17 @@ def test_odd_field_types_do_not_crash():
     assert "### 5 — (no location) — medium" in md and "## Unlinked findings" in md
 
 
+def test_text_details_survive():
+    labels = synth.anonymize(RUNS, random.Random(2))
+    lab = {r.spec.name: f"[{k}]" for k, r in labels.items()}
+    data = {"findings": [{"title": "Spaces", "severity": "critical", "reviewers": [lab["codex#1"]],
+                          "text": 'Input "a  b" becomes "a b";\nsee foo()[R1] and ' + lab["codex#1"]
+                                  + lab["codex#2"] + "."}], "verdict": "v"}
+    md = synth.render_review(data, labels)
+    assert '"a  b" becomes "a b"; see foo()[R1] and codex#1, codex#2.' in md
+    assert "— high" in md
+
+
 def test_no_findings_shows_only_the_verdict():
     labels = synth.anonymize(RUNS, random.Random(1))
     assert synth.render_review({"findings": [], "verdict": "Ship it."}, labels) == \

@@ -56,7 +56,8 @@ not upgrade a suggestion into a defect.
 - In any text, refer to reviewers only by their labels with the brackets, one by one \
 ([R2], [R3], [R4]), never as a range."""
 
-_LABEL = re.compile(r"(?<![\w\]\[])\[(R\d{1,3})\](?![\[\w])")
+_LABEL = re.compile(r"(?<![\w\]\[)])\[(R\d{1,3})\](?![\[\w])")
+_ADJACENT = re.compile(r"(\[R\d{1,3}\])(?=\[R\d)")
 _ANY_LABEL = re.compile(r"\bR(\d{1,3})\b", re.I)
 
 
@@ -78,11 +79,15 @@ def review_user_prompt(prompt: str, runs: list[ReviewerRun], labels: dict[str, R
 
 
 def _names(text: str, labels: dict[str, ReviewerRun]) -> str:
+    text = _ADJACENT.sub(r"\1, ", text)                     # "[R2][R3]" -> "[R2], [R3]"
     return _LABEL.sub(lambda m: labels[m[1]].spec.name if m[1] in labels else m[0], text)
 
 
 def _text(value) -> str:
-    return " ".join(str(value).split()) if isinstance(value, (str, int, float)) else ""
+    """One line; spaces inside the text (for example in a quoted input) stay as they are."""
+    if not isinstance(value, (str, int, float)):
+        return ""
+    return re.sub(r"[ \t]*\r?\n\s*", " ", str(value)).strip()
 
 
 def render_review(data: dict, labels: dict[str, ReviewerRun]) -> str:
@@ -115,6 +120,8 @@ def render_review(data: dict, labels: dict[str, ReviewerRun]) -> str:
                 if label in labels and labels[label] not in who:
                     who.append(labels[label])
         sev = _text(item.get("severity")).lower()
+        sev = {"critical": "high", "blocker": "high", "major": "high", "minor": "low",
+               "nit": "low"}.get(sev, sev)
         sev = sev if sev in SEVERITIES else "medium"
         title = _names(_text(item.get("title")), labels) or "Untitled finding"
         loc = _text(item.get("location")).replace("`", "") or "(no location)"
