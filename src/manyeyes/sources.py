@@ -458,7 +458,7 @@ async def _run_net(argv: list[str], env: dict[str, str], timeout: float) -> str:
         return await _run(argv, env, timeout)
     except SourceError as e:
         msg = str(e)
-        if ("couldn't find remote ref" in msg or HTTP_4XX_RE.search(msg)
+        if (MISSING_OBJECT_RE.search(msg) or HTTP_4XX_RE.search(msg)
                 or not NET_ERROR_RE.search(msg)):
             raise
     await asyncio.sleep(RETRY_DELAYS_S[0])

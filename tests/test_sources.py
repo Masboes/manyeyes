@@ -355,3 +355,22 @@ async def test_resolve_pr_does_not_retry_a_timeout(monkeypatch):
 def test_git_runs_with_english_messages():
     from manyeyes.sources import git_auth_env
     assert git_auth_env("")["LC_ALL"] == "C"
+
+
+@pytest.mark.parametrize("msg", [
+    "fatal: remote error: upload-pack: not our ref " + "a" * 40 + "\n"
+    "fatal: the remote end hung up unexpectedly",
+    "fatal: couldn't find remote ref refs/heads/fix-TLS-config",
+])
+async def test_missing_refs_are_never_retried(monkeypatch, msg):
+    from manyeyes import sources
+    monkeypatch.setattr(sources, "RETRY_DELAYS_S", (0.0, 0.0))
+    calls = []
+
+    async def missing(argv, env, timeout, ok_codes=(0,)):
+        calls.append(argv)
+        raise SourceError(f"git fetch failed: {msg}")
+    monkeypatch.setattr(sources, "_run", missing)
+    with pytest.raises(SourceError):
+        await sources._run_net(["git", "fetch"], {}, 5)
+    assert len(calls) == 1
