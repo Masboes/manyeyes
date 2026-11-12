@@ -57,3 +57,13 @@ def test_runner_reports_a_blind_codex_as_an_error(settings, tmp_path):
     parsed = run(settings, tmp_path, cmd(BROKEN, 1), say("I couldn't inspect the change."))
     outcome, reason = classify_failure(parsed.error_text, "", "", 0)
     assert outcome == Outcome.ERROR and "its sandbox failed" in reason
+
+
+def test_a_nonzero_command_that_ran_keeps_the_review(settings, tmp_path):
+    parsed = run(settings, tmp_path, cmd("diff --git a/x b/x\n+bug", 1), cmd(BROKEN, 1),
+                 say("Found a bug in x."))
+    assert parsed.review == "Found a bug in x."
+
+
+def test_no_commands_at_all_keeps_the_review(settings, tmp_path):
+    assert run(settings, tmp_path, say("Answer from the prompt alone.")).review

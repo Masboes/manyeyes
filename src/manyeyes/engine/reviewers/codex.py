@@ -80,10 +80,10 @@ class CodexReviewer(Reviewer):
             item = ev.get("item") or {}
             if etype == "item.completed" and item.get("type") == "command_execution":
                 output = str(item.get("aggregated_output") or "").lstrip()
-                if item.get("exit_code") == 0:
-                    cmd_ok += 1
-                elif output.startswith(SANDBOX_BROKEN):
+                if item.get("exit_code") not in (0, None) and output.startswith(SANDBOX_BROKEN):
                     blind_output = blind_output or output.splitlines()[0][:200]
+                else:          # it ran, whatever its exit code (git diff --exit-code: 1)
+                    cmd_ok += 1
             if item.get("type") == "agent_message" or etype == "agent_message":
                 text = item.get("text") or ev.get("text")
                 if text:
