@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .. import modes
 from ..config import EDITABLE, KEY_BY_NAME, ConfigError, coerce, validate
+from ..engine.bundle import notes_of
 from ..engine.roster import RosterError, build_specs
 from ..sources import SourceError, parse_context
 from ..store import stats
@@ -159,6 +160,7 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
         runs = [{k: v for k, v in r.items() if k != "review_md"} | {"has_review": bool(r["review_md"])}
                 for r in store.runs_for(job_id)]
         return {**job_view(job), "synthesis": job.get("synthesis_md"),
+                "notes": notes_of(job.get("result_md")),
                 "runs": runs, "synth": store.synth_for(job_id)}
 
     @api.get("/jobs/{job_id}/result", response_class=PlainTextResponse)

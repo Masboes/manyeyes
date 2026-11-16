@@ -134,6 +134,12 @@ Put a `MANYEYES.md` file in the root of your repository, or in `.github/`. It wo
 
 manyeyes reads the file from the base branch, never from the change under review. A pull request therefore cannot change the rules it is judged by, if its base branch is protected. A pull request on top of another branch gets the standards of that branch. A change to `MANYEYES.md` applies after it merges. Text over 20,000 characters is cut, and a file over 80 KB is not used.
 
+### The pull request's own words
+
+When you review a pull request (not a branch), the reviewers also get its title, description and comments. They use them to learn what the change claims to do, and they check those claims against the code. Comments from bots are left out, so an earlier review cannot steer a new one. Only comments from the pull request's author (also an outside contributor) and from the repository's owners, members and collaborators count; other people's comments never reach a reviewer. The description is always included, also when a bot such as Dependabot wrote the pull request. The text is marked as data, not as instructions. Like the code, this text goes to the reviewer providers (OpenAI, Anthropic) and can appear in quotes in the result. Turn it off with `review.pr_context = false`.
+
+If manyeyes cannot read `MANYEYES.md` or the pull request comments, the review still runs, and the result starts with a note that says so.
+
 ### From a coding agent, without MCP
 
 Any agent with a shell can call the CLI directly. Add this to the agent's instructions (for example your `CLAUDE.md`):

@@ -31,6 +31,7 @@ straggler_grace_s = 90
 | `roster_quick` | `MANYEYES_ROSTER_QUICK` | `codex:4,claude:1` | yes | Reviewers for a quick run (`mode=quick`, `--quick`): fewer and faster, for iterating. |
 | `roster_deep` | `MANYEYES_ROSTER_DEEP` | `codex:8,claude:3` | yes | Reviewers for a deep run (`mode=deep`, `--deep`); deep runs always use the thorough prompt. |
 | `review.depth` | `MANYEYES_REVIEW_DEPTH` | `standard` | yes | Prompt for full runs: `standard` or `thorough` (reads every changed file in full, traces callers and dependencies; about 3x slower and 5x the tokens). Quick runs are always standard, deep runs always thorough. One of: standard, thorough. |
+| `review.pr_context` | `MANYEYES_REVIEW_PR_CONTEXT` | `True` | yes | For a pull request, give the reviewers its title, description and human comments (bots left out), marked as data, not instructions. |
 | `reviewers.codex.model` | `MANYEYES_REVIEWERS_CODEX_MODEL` | `gpt-6.1-sol` | yes | Codex model. |
 | `reviewers.codex.effort` | `MANYEYES_REVIEWERS_CODEX_EFFORT` | `medium` | yes | Codex reasoning effort. One of: minimal, low, medium, high, xhigh. |
 | `reviewers.codex.sandbox` | `MANYEYES_REVIEWERS_CODEX_SANDBOX` | `read-only` |  | Codex's own sandbox inside the jail: `read-only` or `danger-full-access`. One of: read-only, danger-full-access. |

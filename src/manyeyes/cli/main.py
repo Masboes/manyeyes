@@ -201,7 +201,8 @@ async def _swarm(args: argparse.Namespace, s: Settings) -> int:
             err(f"cloning {args.repo}…")
             task = await clone_review(args.repo, work, token=s["github.token"],
                                       timeout=s["limits.clone_timeout_s"], pr=args.pr,
-                                      head=args.branch, base=args.base, instructions=args.focus)
+                                      head=args.branch, base=args.base, instructions=args.focus,
+                                      with_pr_context=bool(s["review.pr_context"]))
             fields.update(repo=args.repo, pr=args.pr, prompt=args.focus or None)
         else:
             # Inside the container the launcher passes the host's absolute path.
@@ -239,13 +240,15 @@ async def _swarm(args: argparse.Namespace, s: Settings) -> int:
         shutil.rmtree(Path(str(work) + "-context"), ignore_errors=True)
 
     from ..jobs import job_title
-    full_md = render_markdown(job_title(store.get_job(job["id"]) or job), result)
+    notes = getattr(task, "notes", ())
+    full_md = render_markdown(job_title(store.get_job(job["id"]) or job), result, notes=notes)
     path = _write_private(s.data_dir / "results", f"{job['id']}.md", full_md)
     if args.json:
-        print(json.dumps({"id": job["id"], **result_dict(result)}, indent=2, default=str))
+        print(json.dumps({"id": job["id"], **result_dict(result, notes)}, indent=2,
+                         default=str))
     else:
         print(full_md if args.full else render_markdown(
-            job_title(job), result, include_reviews=False))
+            job_title(job), result, include_reviews=False, notes=notes))
     err(f"full result: {path}")
     if result.successes:
         return 0

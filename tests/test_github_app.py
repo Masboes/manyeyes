@@ -399,3 +399,24 @@ def test_answer_lookup_fails_closed_and_follows_pages(settings):
     with pytest.raises(github_app.GitHubAppError) as e:
         asyncio.run(app.answer(*args))
     assert not e.value.permanent and posts == []      # in doubt: no post
+
+
+
+def test_result_comment_shows_the_notes():
+    from manyeyes.engine.bundle import NOTE_PREFIX
+    job = {"status": "done", "requested_by": "ann", "head_sha": "abc1234def",
+           "synthesis_md": "All good.",
+           "result_md": f"# Review\n\n**Reviews:** 2 of 2 succeeded\n\n{NOTE_PREFIX}MANYEYES.md "
+                        "was not used.\n\n## Synthesis\n\nAll good.\n"}
+    out = result_comment(job, None)
+    assert f"{NOTE_PREFIX}MANYEYES.md was not used." in out
+    assert out.index("MANYEYES.md") < out.index("All good.")
+
+
+
+def test_result_comment_keeps_notes_without_a_synthesis():
+    from manyeyes.engine.bundle import NOTE_PREFIX
+    md = f"# Review\n\n{NOTE_PREFIX}The pull request comments were not read.\n\n## Synthesis\n"
+    for status in ("done", "failed"):
+        out = result_comment({"status": status, "result_md": md, "error": "x"}, None)
+        assert "were not read" in out

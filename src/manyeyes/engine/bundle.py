@@ -19,12 +19,24 @@ def fmt_tokens(n: int | None) -> str:
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
-def header_lines(title: str, result: SwarmResult) -> list[str]:
+NOTE_PREFIX = "> **Note:** "
+
+
+def notes_of(result_md: str | None) -> list[str]:
+    """The notes in a rendered result's header (render_markdown puts them there)."""
+    top = (result_md or "").split("\n## Synthesis", 1)[0]
+    return [ln[len(NOTE_PREFIX):] for ln in top.splitlines() if ln.startswith(NOTE_PREFIX)]
+
+
+def header_lines(title: str, result: SwarmResult, notes: tuple[str, ...] = ()) -> list[str]:
     ok = len(result.successes)
     counts = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in
                        sorted(result.outcome_counts.items()) if k != "success")
     line = f"**Reviews:** {ok} of {len(result.runs)} succeeded" + (f" ({counts})" if counts else "")
-    return [f"# {title}", "", line]
+    out = [f"# {title}", "", line]
+    for n in notes:
+        out += ["", NOTE_PREFIX + n]
+    return out
 
 
 def synthesis_section(result: SwarmResult) -> list[str]:
@@ -35,8 +47,9 @@ def synthesis_section(result: SwarmResult) -> list[str]:
     return ["## Synthesis", "", f"_Synthesis skipped: {reason}_"]
 
 
-def render_markdown(title: str, result: SwarmResult, *, include_reviews: bool = True) -> str:
-    lines = header_lines(title, result) + [""] + synthesis_section(result)
+def render_markdown(title: str, result: SwarmResult, *, include_reviews: bool = True,
+                    notes: tuple[str, ...] = ()) -> str:
+    lines = header_lines(title, result, notes) + [""] + synthesis_section(result)
     if include_reviews:
         lines += ["", "## Reviews", ""]
         for r in result.runs:
@@ -53,14 +66,15 @@ def render_markdown(title: str, result: SwarmResult, *, include_reviews: bool = 
             lines.append("")
     elif not (result.synth and result.synth.outcome == "success") and result.successes:
         # No synthesis: the reviews are the only result, so include them.
-        return render_markdown(title, result, include_reviews=True)
+        return render_markdown(title, result, include_reviews=True, notes=notes)
     return "\n".join(lines).rstrip() + "\n"
 
 
-def result_dict(result: SwarmResult) -> dict[str, Any]:
+def result_dict(result: SwarmResult, notes: tuple[str, ...] = ()) -> dict[str, Any]:
     s = result.synth
     return {
         "status": result.status,
+        "notes": list(notes),
         "partial": result.partial,
         "outcomes": result.outcome_counts,
         "synthesis": s.text if s and s.outcome == "success" else None,
