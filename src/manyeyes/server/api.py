@@ -14,6 +14,7 @@ from .. import modes
 from ..config import EDITABLE, KEY_BY_NAME, ConfigError, coerce, validate
 from ..engine.bundle import notes_of
 from ..engine.roster import RosterError, build_specs
+from ..logins import LoginError, list_logins, login_home
 from ..sources import SourceError, parse_context
 from ..store import stats
 from . import limits
@@ -63,6 +64,11 @@ def job_view(job: dict[str, Any]) -> dict[str, Any]:
     out["options"] = json.loads(job["options_json"]) if job.get("options_json") else {}
     out["partial"] = bool(job.get("partial"))
     return out
+
+
+class LoginChange(BaseModel):
+    enabled: bool | None = None
+    wake: bool = False     # end a rest after a rate limit now
 
 
 def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) -> APIRouter:
@@ -202,22 +208,60 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
 
     # -- stats ----------------------------------------------------------------
 
+    def login_view() -> list[dict[str, Any]]:
+        """Every reviewer login folder with its state. No secrets: names and flags only."""
+        states = store.login_states()
+        pool = worker.logins
+        out = []
+        for x in list_logins(current().auth_dir):
+            st = states.get(x.key) or {}
+            out.append({"kind": x.kind, "name": x.name, "logged_in": x.logged_in,
+                        "enabled": bool(st.get("enabled", 1)),
+                        "resting_until": pool.resting_until(x, states),
+                        "running": pool.inflight.get(x.key, 0)})
+        return out
+
+    @api.post("/logins/{kind}/{name}")
+    def change_login(kind: str, name: str, body: LoginChange,
+                     c: Caller = Depends(caller)) -> dict[str, Any]:
+        require_manager(c)
+        try:
+            login_home(current().auth_dir, kind, name)
+        except LoginError as e:
+            raise HTTPException(422, str(e)) from e
+        if not any(x.key == (kind, name) for x in list_logins(current().auth_dir, kind)):
+            raise HTTPException(404, f"no {kind} login named {name!r}")
+        fields: dict[str, Any] = {}
+        if body.enabled is not None:
+            fields["enabled"] = int(body.enabled)
+        if body.wake:
+            fields["resting_until"] = None
+        if not fields:
+            raise HTTPException(422, "give enabled, wake, or both")
+        store.set_login(kind, name, by=c.login, **fields)
+        store.audit(c.login, "login_change", {"kind": kind, "name": name,
+                                               **{k: v for k, v in fields.items()}})
+        return next(x for x in login_view() if (x["kind"], x["name"]) == (kind, name))
+
     @api.get("/usage")
     def usage(history: bool = False, c: Caller = Depends(caller)) -> dict[str, Any]:
         """Plan usage of the reviewer logins, per provider: the newest successful
         reading, and the newest error when it came later. `history`: 7 days of readings."""
         interval = int(current()["usage.interval_min"])
         # A provider that is no longer read (logged out, probe off) goes stale and drops out.
+        logins = login_view()
         if not interval:
-            return {"interval_min": 0, "providers": [], **({"history": []} if history else {})}
+            return {"interval_min": 0, "providers": [], "logins": logins,
+                    **({"history": []} if history else {})}
         fresh = time.time() - max(3 * interval * 60, 3600)
         rows = store.usage_since(time.time() - 7 * 86400 if history else fresh)
-        providers: dict[str, dict[str, Any]] = {}
+        providers: dict[tuple[str, str], dict[str, Any]] = {}
         for r in rows:
             if r["ts"] < fresh:
                 continue
-            p = providers.setdefault(r["provider"], {"provider": r["provider"], "read_at": None,
-                                                     "windows": [], "error": None})
+            p = providers.setdefault((r["provider"], r["login"]), {
+                "provider": r["provider"], "login": r["login"], "read_at": None,
+                "windows": [], "error": None})
             if r["error"]:
                 p["error"], p["error_at"] = r["error"], r["ts"]
             else:
@@ -229,7 +273,8 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
             if p["read_at"] and p.get("error_at", 0) < p["read_at"]:
                 p["error"] = None
             p.pop("error_at", None)
-        out: dict[str, Any] = {"interval_min": interval, "providers": list(providers.values())}
+        out: dict[str, Any] = {"interval_min": interval, "providers": list(providers.values()),
+                               "logins": logins}
         if history:
             out["history"] = [r for r in rows if not r["error"]]
         return out

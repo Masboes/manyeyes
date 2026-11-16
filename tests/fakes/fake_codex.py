@@ -5,6 +5,7 @@
   slow-<sec>      sleep, then ok
   hang            sleep forever (ignores nothing; killed by signal)
   ratelimit       error event + stderr, exit 1
+  limited-<name>  ratelimit, except on the login folder codex@<name>: then ok
   auth            "not logged in" on stderr, exit 1
   empty           exit 0 without a message
   envdump         the review text is the process environment as JSON
@@ -41,6 +42,14 @@ elif model == "hang":
     while True:
         time.sleep(1)
 elif model == "ratelimit":
+    print(json.dumps({"type": "error", "message": "You've hit your usage limit. Try again later."}))
+    print("stream error: 429 Too Many Requests", file=sys.stderr)
+    sys.exit(1)
+elif model.startswith("limited-"):
+    login_dir = os.path.basename(os.path.dirname(os.readlink(
+        os.path.join(os.environ["CODEX_HOME"], "auth.json"))))
+    if login_dir == "codex@" + model.split("-", 1)[1]:
+        ok(f"Reviewed on {login_dir}.")
     print(json.dumps({"type": "error", "message": "You've hit your usage limit. Try again later."}))
     print("stream error: 429 Too Many Requests", file=sys.stderr)
     sys.exit(1)

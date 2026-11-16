@@ -43,7 +43,8 @@ EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
 KEYS: tuple[Key, ...] = (
     Key("data_dir", Path, "~/.manyeyes", "Database, runs, secrets file and auth homes. "
         "Keep it outside /tmp: Codex refuses to run its sandbox from there."),
-    Key("auth_dir", Path, "", "Reviewer login homes (`codex/`, `claude/`). Default `<data_dir>/auth`."),
+    Key("auth_dir", Path, "", "Reviewer login homes (`codex/`, `claude/`, and `codex@<name>/`, "
+        "`claude@<name>/` for more logins). Default `<data_dir>/auth`."),
     Key("roster", str, "codex:8,claude:2",
         "Reviewers for a full run (the default mode).", editable=True),
     Key("roster_quick", str, "codex:4,claude:1",
@@ -72,6 +73,9 @@ KEYS: tuple[Key, ...] = (
         choices=("low", "medium", "high", "xhigh", "max")),
     Key("reviewers.claude.bin", str, "claude", "Claude Code CLI command."),
     Key("limits.reviewer_timeout_s", int, 600, "Hard limit per reviewer, seconds.", editable=True),
+    Key("limits.login_rest_s", int, 1800,
+        "How long a reviewer login rests after a rate limit, in seconds, when no usage "
+        "reading tells when its plan window resets.", editable=True),
     Key("limits.quorum_fraction", float, 0.8,
         "Share of reviewers that must succeed before the straggler grace starts.", editable=True),
     Key("limits.straggler_grace_s", int, 120,

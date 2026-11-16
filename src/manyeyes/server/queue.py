@@ -18,6 +18,7 @@ from .. import modes
 from ..config import ConfigError, Settings
 from ..engine.task import SparTask
 from ..jobs import run_job
+from ..logins import LoginPool
 from ..sources import (
     SourceError,
     clone_review,
@@ -48,6 +49,8 @@ class Worker:
         self.base = settings
         self.store = store
         self.slots = asyncio.Semaphore(int(settings["server.max_concurrent_reviewers"]))
+        # One pool for all jobs: it counts the reviewers on each login.
+        self.logins = LoginPool(settings, store)
         self.tasks: dict[str, asyncio.Task] = {}
         self._wake = asyncio.Event()
         self._loop: asyncio.Task | None = None
@@ -305,7 +308,7 @@ class Worker:
                                             for c in ctx]
             try:
                 await run_job(self.store, s, job, task, work, slots=self.slots,
-                              deadline=deadline, extra_ro=extra_ro)
+                              deadline=deadline, extra_ro=extra_ro, pool=self.logins)
             except TimeoutError:
                 pass   # run_job recorded the job timeout
         finally:

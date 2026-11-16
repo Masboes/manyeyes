@@ -600,6 +600,11 @@ function progressModel(job, events) {
         r.state = p.outcome || "error"; r.duration = p.duration_s; r.reason = p.reason;
         break;
       }
+      case "reviewer_retry": {
+        const r = ensure(p.reviewer);
+        r.state = "active";
+        break;
+      }
       case "quorum_reached": m.quorumReached = true; m.grace = p.grace_s ?? null; break;
       case "synth_started": m.phase = "synth"; break;
       case "synth_finished": m.phase = "synth_done"; m.synth = p; break;
@@ -623,8 +628,9 @@ function eventText(ev) {
     case "reviewer_finished": {
       const bad = p.outcome !== "success";
       return [h("span", { class: bad ? "ev-fail" : null }, `${p.reviewer} ${bad ? outcomeLabel(p.outcome).toLowerCase() : "finished"}`),
-        h("span", { class: "faint" }, ` · ${fmtDur(p.duration_s)}${p.reason ? ` · ${p.reason}` : ""}`)];
+        h("span", { class: "faint" }, ` · ${fmtDur(p.duration_s)}${p.login && p.login !== "default" ? ` · login ${p.login}` : ""}${p.reason ? ` · ${p.reason}` : ""}`)];
     }
+    case "reviewer_retry": return [`${p.reviewer} ${p.outcome === "auth_failed" ? "could not sign in with" : "hit the rate limit on"} login ${p.login}; it runs again on another login`];
     case "quorum_reached": return [`Quorum reached with ${p.successes} reviews. The others get ${fmtDur(p.grace_s)}.`];
     case "synth_started": return ["Writing the synthesis"];
     case "synth_finished": return [`Synthesis ${p.outcome === "success" ? "done" : p.outcome}`, h("span", { class: "faint" }, ` · ${fmtDur(p.duration_s)}${p.note ? ` · ${p.note}` : ""}`)];
@@ -1491,24 +1497,69 @@ function viewStats(main) {
     return `resets in ${Math.round(m / 1440)} days`;
   }
 
-  function usageBlock(u) {
-    if (!u || !u.providers || (!u.providers.length && !u.interval_min)) return null;
-    const body = u.providers.length ? u.providers.map((p) => {
-      const plan = p.windows.find((w) => w.plan)?.plan;
-      return h("div", { class: "usage-provider" },
-        h("p", { class: "t-meta", style: "margin-bottom:0.5rem" }, p.provider === "codex" ? "Codex" : "Claude", plan ? ` · ${plan}` : "",
-          p.read_at ? h("span", { class: "faint" }, " · read ", timeEl(p.read_at)) : null),
-        p.windows.length ? h("ul", { class: "bars-list usage-list" }, p.windows.map((w) => h("li", null,
-          h("span", null, w.window.charAt(0).toUpperCase() + w.window.slice(1)),
-          h("span", { class: "track", role: "img", "aria-label": `${Math.round(w.used_percent)}% used` },
-            h("span", { class: `fillbar ${w.used_percent >= 90 ? "bad" : "ok"}`, style: `display:block;width:${Math.min(100, w.used_percent)}%` })),
-          h("span", { class: "t-num" }, `${Math.round(w.used_percent)}%`),
-          h("span", { class: "t-meta hide-xs", title: w.resets_at ? absTime(w.resets_at) : "" }, resetsIn(w.resets_at))))) : null,
-        p.error ? h("p", { class: "t-meta", style: "margin-top:0.5rem" }, `Last reading failed: ${p.error}`) : null);
-    }) : h("p", { class: "notice" }, "No current reading. The server reads it for each logged-in reviewer kind; a reading older than three intervals is not shown.");
-    return block("Plan usage", body, {
+  function windowList(windows) {
+    return h("ul", { class: "bars-list usage-list" }, windows.map((w) => h("li", null,
+      h("span", null, w.window.charAt(0).toUpperCase() + w.window.slice(1)),
+      h("span", { class: "track", role: "img", "aria-label": `${Math.round(w.used_percent)}% used` },
+        h("span", { class: `fillbar ${w.used_percent >= 90 ? "bad" : "ok"}`, style: `display:block;width:${Math.min(100, w.used_percent)}%` })),
+      h("span", { class: "t-num" }, `${Math.round(w.used_percent)}%`),
+      h("span", { class: "t-meta hide-xs", title: w.resets_at ? absTime(w.resets_at) : "" }, resetsIn(w.resets_at)))));
+  }
+
+  function restText(ts) {
+    const m = Math.max(1, Math.round((ts - Date.now() / 1000) / 60));
+    return m < 60 ? `${m} min` : m < 48 * 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}` : `${Math.round(m / 1440)} days`;
+  }
+
+  // One row per reviewer login: its plan windows, its state, and (for admins) a switch.
+  function usageBlock(u, onChange) {
+    if (!u || ((!u.providers || !u.providers.length) && !(u.logins || []).length && !u.interval_min)) return null;
+    const logins = u.logins || [];
+    const readings = u.providers || [];
+    const kindName = (k) => (k === "codex" ? "Codex" : "Claude");
+    const several = (k) => logins.filter((l) => l.kind === k).length > 1;
+    const manage = !!state.me?.can_manage;
+    const change = async (l, body, btn) => {
+      btn.disabled = true;
+      try {
+        await api(`api/logins/${encodeURIComponent(l.kind)}/${encodeURIComponent(l.name)}`, { method: "POST", body });
+        onChange();
+      } catch (e) { toast(e.message, true); btn.disabled = false; }
+    };
+    const rows = logins.length ? logins.map((l) => {
+      const p = readings.find((r) => r.provider === l.kind && (r.login || "default") === l.name);
+      const plan = p?.windows.find((w) => w.plan)?.plan;
+      const flags = [];
+      if (!l.logged_in) flags.push(h("span", { class: "badge b-high" }, "Not logged in"));
+      if (!l.enabled) flags.push(h("span", { class: "badge b-low" }, "Switched off"));
+      if (l.resting_until) flags.push(h("span", { class: "badge b-medium", title: absTime(l.resting_until) }, `Rate limited, rests ${restText(l.resting_until)}`));
+      if (l.running) flags.push(h("span", { class: "badge b-ui" }, `${l.running} running`));
+      const actions = [];
+      if (manage && l.logged_in) {
+        const sw = h("button", { class: "btn btn-quiet btn-sm", type: "button" }, l.enabled ? "Switch off" : "Switch on");
+        sw.onclick = () => change(l, { enabled: !l.enabled }, sw);
+        actions.push(sw);
+        if (l.resting_until) {
+          const wake = h("button", { class: "btn btn-quiet btn-sm", type: "button" }, "End the rest");
+          wake.onclick = () => change(l, { wake: true }, wake);
+          actions.push(wake);
+        }
+      }
+      return h("div", { class: `usage-provider${l.enabled ? "" : " is-off"}` },
+        h("div", { class: "usage-head" },
+          h("p", { class: "t-meta" }, kindName(l.kind), several(l.kind) || l.name !== "default" ? h("b", null, ` · ${l.name}`) : "", plan ? ` · ${plan}` : "",
+            p?.read_at ? h("span", { class: "faint" }, " · read ", timeEl(p.read_at)) : null),
+          flags.length ? h("span", { class: "usage-flags" }, ...flags) : null,
+          actions.length ? h("span", { class: "usage-actions" }, ...actions) : null),
+        p?.windows.length ? windowList(p.windows) : (l.logged_in ? h("p", { class: "t-meta faint" }, "No current reading.") : null),
+        p?.error ? h("p", { class: "t-meta", style: "margin-top:0.5rem" }, `Last reading failed: ${p.error}`) : null);
+    }) : readings.length ? readings.map((p) => h("div", { class: "usage-provider" },
+      h("p", { class: "t-meta", style: "margin-bottom:0.5rem" }, kindName(p.provider)),
+      p.windows.length ? windowList(p.windows) : null))
+      : h("p", { class: "notice" }, "No current reading. The server reads it for each reviewer login; a reading older than three intervals is not shown.");
+    return block("Plan usage", rows, {
       note: h("p", { class: "t-meta" },
-        "How much of the Codex and Claude plans the reviewer logins have used, for all their use, not only manyeyes. ",
+        "How much of each reviewer login's plan is used, for all its use, not only manyeyes. A reviewer gets the login with the most quota left; a rate-limited login rests until its window resets. ",
         u.interval_min ? `Read every ${u.interval_min} min; reading spends no tokens.` : "Reading is off (usage.interval_min = 0)."),
     });
   }
@@ -1540,7 +1591,7 @@ function viewStats(main) {
         fig("Jobs succeeded", fmtPct(j.success_rate), j.partial ? `${fmtInt(j.partial)} with a partial result` : "of the jobs that finished", 1),
         fig("Median run time", durFigure(j.run_s?.p50), j.run_s?.p90 != null ? `p90 ${fmtDur(j.run_s.p90)}, longest ${fmtDur(j.run_s.max)}` : null, 2),
         fig("Reviews succeeded", runsTotal ? fmtPct(runsOk / runsTotal) : "–", `${fmtInt(runsOk)} of ${fmtInt(runsTotal)} reviewer runs`, 3)),
-      usageBlock(u),
+      usageBlock(u, () => load(false)),
       block("Jobs", h("div", { class: "split" },
         h("div", null, h("p", { class: "t-meta", style: "margin-bottom:0.5rem" }, "By status"), bars(st, j.total, (k) => (k === "done" ? "ok" : k === "failed" ? "bad" : ""))),
         h("div", null,

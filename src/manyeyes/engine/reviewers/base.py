@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ...logins import DEFAULT, login_home
 from ..models import ReviewerSpec, Usage
 
 if TYPE_CHECKING:
@@ -47,6 +48,7 @@ class Reviewer(ABC):
         self.spec = spec
         self.settings = settings
         self.run_dir = run_dir      # per-job scratch, private to the engine
+        self.login = DEFAULT        # which reviewer login (see logins.py)
 
     @property
     def binary_name(self) -> str:
@@ -57,7 +59,7 @@ class Reviewer(ABC):
 
     @property
     def auth_home(self) -> Path:
-        return self.settings.auth_dir / self.kind
+        return login_home(self.settings.auth_dir, self.kind, self.login)
 
     def base_env(self, home: Path) -> dict[str, str]:
         b = self.binary()

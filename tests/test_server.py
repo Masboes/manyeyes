@@ -432,3 +432,22 @@ def test_job_api_lists_the_notes():
     from manyeyes.engine.bundle import NOTE_PREFIX, notes_of
     md = f"# R\n\n**Reviews:** 1 of 1\n\n{NOTE_PREFIX}A note.\n\n## Synthesis\n\n{NOTE_PREFIX}not one\n"
     assert notes_of(md) == ["A note."] and notes_of(None) == []
+
+
+def test_logins_in_usage_and_switch(server_settings, tmp_path):
+    auth = server_settings.auth_dir   # the fixture made auth/codex with a login
+    (auth / "codex@spare").mkdir()
+    (auth / "codex@spare" / "auth.json").write_text("{}")
+    (auth / "codex@Bad Name").mkdir()
+    app = create_app(server_settings)
+    with TestClient(app, base_url="http://testserver") as c:
+        logins = c.get("/api/usage", headers=H).json()["logins"]
+        assert [(x["kind"], x["name"], x["enabled"]) for x in logins] == [
+            ("codex", "default", True), ("codex", "spare", True)]
+        r = c.post("/api/logins/codex/spare", headers=H, json={"enabled": False})
+        assert r.status_code == 200 and r.json()["enabled"] is False
+        assert c.post("/api/logins/codex/nope", headers=H, json={"enabled": False}).status_code == 404
+        assert c.post("/api/logins/codex/Bad%20Name", headers=H, json={"enabled": False}).status_code == 422
+        assert c.post("/api/logins/codex/spare", headers=H, json={}).status_code == 422
+        audit = c.get("/api/audit", headers=H).json()
+        assert any(a["action"] == "login_change" for a in audit)

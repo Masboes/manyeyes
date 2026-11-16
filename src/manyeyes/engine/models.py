@@ -57,6 +57,7 @@ class ReviewerRun:
     started_at: float = 0.0      # epoch seconds
     finished_at: float = 0.0
     usage: Usage = field(default_factory=Usage)
+    login: str = ""              # the reviewer login used ("default", or a named one)
 
     @property
     def duration_s(self) -> float:

@@ -37,8 +37,10 @@ class CodexReviewer(Reviewer):
     def prepare(self) -> None:
         self.home.mkdir(parents=True, exist_ok=True)
         link = self.home / "auth.json"
-        if not link.is_symlink():
-            link.symlink_to(self.auth_home / "auth.json")
+        # Re-point every time: a retry can run on another login.
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(self.auth_home / "auth.json")
 
     # The prompt goes on stdin ("-"): no argv length limit, and it does not
     # show up in the process list.
