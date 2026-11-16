@@ -41,6 +41,8 @@ MAX_COMMENT = 60_000
 # start a review. On a public repository, strangers cannot spend the plan.
 TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 MODES = ("quick", "full", "deep")
+# GitHub caps webhook payloads at 25 MB; a comment event is far smaller.
+MAX_BODY = 5 * 1024 * 1024
 
 
 class GitHubAppError(RuntimeError):
@@ -53,23 +55,27 @@ class Command:
     focus: str
 
 
+_CODE = re.compile(r"^\s*(```|~~~).*?^\s*\1[^\n]*$|`[^`\n]*`", re.MULTILINE | re.DOTALL)
+
+
 def parse_command(body: str, slug: str) -> Command | None:
     """The command in a comment that tags `@slug`, or None when it does not tag it.
 
-    Quoted lines (`> ...`) do not count, so a reply that quotes an older request
-    does not start a second review. The text after the tag is the instruction:
-    an optional word "review", an optional mode (quick, full, deep), then free
-    text that goes to the reviewers as the focus.
+    Quoted lines (`> ...`) and code (fenced blocks, `inline`) do not count, so a
+    reply that quotes an older request, or a comment that shows how to use the
+    App, does not start a review. The text after the tag is the instruction: an
+    optional word "review", an optional mode (quick, full, deep), then free text
+    that goes to the reviewers as the focus.
     """
     if not slug:
         return None
     tag = re.compile(rf"(?<![\w@/.-])@{re.escape(slug)}(?![\w-])", re.IGNORECASE)
     lines = [ln for ln in (body or "").splitlines() if not ln.lstrip().startswith(">")]
-    text = "\n".join(lines)
+    text = _CODE.sub(" ", "\n".join(lines))
     m = tag.search(text)
     if m is None:
         return None
-    rest = text[m.end():].strip()
+    rest = text[m.end():].lstrip(" \t,:;.-")
     words = rest.split(maxsplit=1)
     if words and words[0].lower().strip(":,.") == "review":
         rest = words[1] if len(words) > 1 else ""
@@ -85,23 +91,34 @@ def verify_signature(secret: str, body: bytes, header: str | None) -> bool:
     """Check GitHub's X-Hub-Signature-256 header."""
     if not secret or not header or not header.startswith("sha256="):
         return False
-    want = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(want, header[len("sha256="):])
-
-
-_MENTION = re.compile(r"(`[^`\n]*`)|(?<![\w`])@(?=[A-Za-z0-9])")
+    want = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest().encode()
+    return hmac.compare_digest(want, header[len("sha256="):].encode("utf-8", "replace"))
 
 
 def _defuse_mentions(text: str) -> str:
-    """Stop `@name` in reviewer text from notifying GitHub users.
+    """Stop every `@name` in the text from notifying a GitHub user.
 
-    Code (fenced blocks and inline spans) stays as it is: GitHub does not link
-    mentions there. Elsewhere a zero-width space after the @ breaks the link.
+    A zero-width space after the @ breaks the link. It is applied everywhere,
+    code included: the text comes from reviewers, and a Markdown parser that
+    is close but not exact would leave mentions active.
     """
-    parts = re.split(r"(^```.*?^```[^\n]*$)", text, flags=re.MULTILINE | re.DOTALL)
-    for i in range(0, len(parts), 2):
-        parts[i] = _MENTION.sub(lambda m: m.group(1) or "@​", parts[i])
-    return "".join(parts)
+    return re.sub(r"@(?=[A-Za-z0-9])", "@\u200b", text)
+
+
+def _close_fences(text: str) -> str:
+    """Close a code fence that a cut left open, so the text after it is not code."""
+    open_fence = None
+    for ln in text.splitlines():
+        m = re.match(r"\s*(```|~~~)", ln)
+        if m:
+            open_fence = None if open_fence == m.group(1) else (open_fence or m.group(1))
+    return text + f"\n{open_fence}" if open_fence else text
+
+
+# Failure reasons that manyeyes itself writes. Others (exception text) can hold
+# paths or tool output and stay on the job page.
+_SAFE_ERRORS = ("could not prepare the code", "could not prepare the related repos",
+                "job timeout", "server restarted", "the server stopped", "cancelled")
 
 
 def result_comment(job: dict[str, Any], job_url: str | None) -> str:
@@ -109,23 +126,29 @@ def result_comment(job: dict[str, Any], job_url: str | None) -> str:
     who = f"@{job['requested_by']}" if job.get("requested_by") else ""
     link = f"[Full result with every review]({job_url})" if job_url else ""
     status = job.get("status")
-    if status == "done":
+    synthesis = job.get("synthesis_md") or ""
+    if status == "done" and synthesis:
         sha = (job.get("head_sha") or "")[:7]
         head = f"{who} manyeyes reviewed commit {sha}.".strip() if sha else \
             f"{who} manyeyes finished the review.".strip()
         if job.get("partial"):
             head += " Some reviewers did not finish; the result is partial."
-        body = job.get("synthesis_md") or job.get("result_md") or "(no result)"
-        body = _defuse_mentions(body)
         room = MAX_COMMENT - len(head) - len(link) - 200
+        body = synthesis
         if len(body) > room:
-            body = body[:room].rstrip() + "\n\n… (cut: the result is too long for a comment)"
+            body = _close_fences(body[:room].rstrip()) + \
+                "\n\n… (cut: the result is too long for a comment)"
+        body = _defuse_mentions(body)
         return "\n\n".join(p for p in (head, body, "---\n" + link if link else "") if p)
-    if status == "cancelled":
+    if status == "done":
+        msg = f"{who} manyeyes finished the review, but the synthesis is missing."
+    elif status == "cancelled":
         msg = f"{who} The manyeyes review was cancelled."
     else:
-        error = (job.get("error") or "unknown error").splitlines()[0][:500]
-        msg = f"{who} The manyeyes review failed: {error}"
+        error = (job.get("error") or "").splitlines()[0][:300] if job.get("error") else ""
+        if not error.startswith(_SAFE_ERRORS):
+            error = "an internal error (the job page has the details)"
+        msg = f"{who} The manyeyes review failed: {_defuse_mentions(error)}"
     return "\n\n".join(p for p in (msg.strip(), link) if p)
 
 
@@ -143,25 +166,42 @@ class GitHubApp:
     def configured(self) -> bool:
         return bool(self.app_id and self.private_key and self.webhook_secret)
 
-    def seen(self, delivery_id: str | None) -> bool:
-        """True when this webhook delivery was handled before (GitHub can redeliver)."""
-        return bool(delivery_id) and delivery_id in self._seen
+    def claim(self, delivery_id: str | None) -> bool:
+        """False when this webhook delivery is handled, or was handled, already.
 
-    def remember(self, delivery_id: str | None) -> None:
+        GitHub redelivers only when someone asks for it, so memory is enough.
+        The claim comes before any await: two copies at once cannot both pass.
+        """
+        if not delivery_id:
+            return True
+        if delivery_id in self._seen:
+            return False
+        self._seen[delivery_id] = None
+        while len(self._seen) > 2000:
+            self._seen.popitem(last=False)
+        return True
+
+    def release(self, delivery_id: str | None) -> None:
+        """Forget a claim whose handling failed, so a redelivery can try again."""
         if delivery_id:
-            self._seen[delivery_id] = None
-            while len(self._seen) > 2000:
-                self._seen.popitem(last=False)
+            self._seen.pop(delivery_id, None)
 
     def _jwt(self) -> str:
         import jwt
         now = int(time.time())
         # GitHub allows at most 10 minutes; start 60 s back for clock drift.
-        return jwt.encode({"iat": now - 60, "exp": now + 540, "iss": self.app_id},
-                          self.private_key, algorithm="RS256")
+        try:
+            return jwt.encode({"iat": now - 60, "exp": now + 540, "iss": self.app_id},
+                              self.private_key, algorithm="RS256")
+        except (ValueError, TypeError, jwt.PyJWTError) as e:
+            raise GitHubAppError(f"cannot sign with github_app.private_key: "
+                                 f"{type(e).__name__}") from e
 
     async def _call(self, method: str, path: str, token: str,
-                    body: dict[str, Any] | None = None) -> httpx.Response:
+                    body: dict[str, Any] | None = None, once: bool = False) -> httpx.Response:
+        """One API call. Retries server and connection errors, except with `once`:
+        a comment that GitHub took but did not confirm would then appear twice.
+        A connection that never opened is always safe to retry."""
         headers = {"Accept": "application/vnd.github+json",
                    "Authorization": f"Bearer {token}",
                    "X-GitHub-Api-Version": "2022-11-28"}
@@ -170,10 +210,10 @@ class GitHubApp:
                 try:
                     r = await client.request(method, API + path, headers=headers, json=body)
                 except httpx.TransportError as e:
-                    if delay is None:
+                    if delay is None or (once and not isinstance(e, httpx.ConnectError)):
                         raise GitHubAppError(f"cannot reach GitHub: {type(e).__name__}") from e
                 else:
-                    if r.status_code < 500 or delay is None:
+                    if r.status_code < 500 or delay is None or once:
                         return r
                 await asyncio.sleep(delay)
         raise AssertionError("unreachable")
@@ -189,11 +229,16 @@ class GitHubApp:
                 raise GitHubAppError("GitHub returned no slug for the App")
         return self._slug
 
-    async def installation_token(self, installation_id: int, repo: str) -> str:
-        """A token for one repository, valid for one hour."""
+    async def installation_token(self, installation_id: int, repo: str,
+                                 read_only: bool = False) -> str:
+        """A token for one repository, valid for one hour. `read_only`: only what a
+        clone needs (contents and pull requests, read)."""
         name = repo.split("/", 1)[1]
+        body: dict[str, Any] = {"repositories": [name]}
+        if read_only:
+            body["permissions"] = {"contents": "read", "pull_requests": "read"}
         r = await self._call("POST", f"/app/installations/{int(installation_id)}/access_tokens",
-                             self._jwt(), {"repositories": [name]})
+                             self._jwt(), body)
         if r.status_code != 201:
             raise GitHubAppError(f"GitHub returned {r.status_code} for an installation "
                                  f"token for {repo}")
@@ -202,7 +247,7 @@ class GitHubApp:
     async def comment(self, installation_id: int, repo: str, number: int, body: str) -> None:
         token = await self.installation_token(installation_id, repo)
         r = await self._call("POST", f"/repos/{repo}/issues/{int(number)}/comments", token,
-                             {"body": body})
+                             {"body": body}, once=True)
         if r.status_code != 201:
             raise GitHubAppError(f"GitHub returned {r.status_code} for a comment on "
                                  f"{repo}#{number}")
@@ -236,6 +281,11 @@ def create_webhook_router(settings: Settings, store: Store, worker: Worker,
 
     router = APIRouter()
     gh = worker.github
+    if gh.configured:
+        try:
+            gh._jwt()
+        except GitHubAppError as e:
+            log.error("GitHub App: %s; tagged comments will fail", e)
     background: set[asyncio.Task] = set()
 
     def later(coro, what: str) -> None:
@@ -267,7 +317,7 @@ def create_webhook_router(settings: Settings, store: Store, worker: Worker,
         repo = str(p["repository"]["full_name"])
         number, inst = int(issue["number"]), int(p["installation"]["id"])
         if comment.get("author_association") not in TRUSTED_ASSOCIATIONS:
-            log.info("GitHub App: %s tagged the App on %s#%s but is not a collaborator",
+            log.debug("GitHub App: %s tagged the App on %s#%s but is not a collaborator",
                      login, repo, number)
             return "ignored: not a collaborator"
         if not auth.allowlist.allows(login):
@@ -295,7 +345,11 @@ def create_webhook_router(settings: Settings, store: Store, worker: Worker,
     async def webhook(request: Request) -> JSONResponse:
         if not gh.configured:
             raise HTTPException(404, "the GitHub App is not configured")
+        if int(request.headers.get("content-length") or 0) > MAX_BODY:
+            raise HTTPException(413, "body too large")
         body = await request.body()
+        if len(body) > MAX_BODY:
+            raise HTTPException(413, "body too large")
         if not verify_signature(gh.webhook_secret, body,
                                 request.headers.get("x-hub-signature-256")):
             raise HTTPException(401, "bad signature")
@@ -303,14 +357,22 @@ def create_webhook_router(settings: Settings, store: Store, worker: Worker,
         delivery = request.headers.get("x-github-delivery")
         if event == "ping":
             return JSONResponse({"result": "pong"})
-        if gh.seen(delivery):
-            return JSONResponse({"result": "ignored: repeated delivery"})
         try:
             payload = json.loads(body)
+        except ValueError as e:
+            raise HTTPException(400, "the body is not JSON") from e
+        if not isinstance(payload, dict):
+            raise HTTPException(400, "the body is not a JSON object")
+        if not gh.claim(delivery):
+            return JSONResponse({"result": "ignored: repeated delivery"})
+        try:
             result = await handle(event, payload)
-        except (ValueError, KeyError, TypeError) as e:
+        except (KeyError, TypeError, ValueError, AttributeError) as e:
+            gh.release(delivery)
             raise HTTPException(400, f"unexpected payload: {type(e).__name__}") from e
-        gh.remember(delivery)
+        except BaseException:
+            gh.release(delivery)
+            raise
         return JSONResponse({"result": result})
 
     return router

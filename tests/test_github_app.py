@@ -1,6 +1,7 @@
 """Reviews started from a pull request comment that tags the GitHub App."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -35,6 +36,9 @@ def rsa_pem() -> str:
     ("@manyeyes-botty review", None),
     ("mail me@manyeyes-bot", None),
     ("ping @other", None),
+    ("@manyeyes-bot, review quick", ("quick", "")),
+    ("Use `@manyeyes-bot review` to start one.", None),
+    ("Example:\n```\n@manyeyes-bot review deep\n```\nok", None),
 ])
 def test_parse_command(body, want):
     cmd = parse_command(body, "manyeyes-bot")
@@ -48,6 +52,7 @@ def test_signature():
     assert not github_app.verify_signature(SECRET, body + b" ", good)
     assert not github_app.verify_signature(SECRET, body, None)
     assert not github_app.verify_signature("", body, good)
+    assert not github_app.verify_signature(SECRET, body, "sha256=é")
 
 
 def test_result_comment():
@@ -55,14 +60,20 @@ def test_result_comment():
            "partial": 1, "synthesis_md": "Ask @bob, see `@types/node` and\n```\n@decorator\n```"}
     out = result_comment(job, "https://x/#/jobs/j1")
     assert out.startswith("@alice manyeyes reviewed commit abcdef1. Some reviewers")
-    assert "@​bob" in out and "`@types/node`" in out and "\n@decorator\n" in out
+    assert "@\u200bbob" in out and "`@\u200btypes/node`" in out and "@\u200bdecorator" in out
     assert out.endswith("---\n[Full result with every review](https://x/#/jobs/j1)")
     long = result_comment({**job, "synthesis_md": "x" * 100_000}, None)
     assert len(long) < 65_536 and long.endswith("too long for a comment)")
+    fenced = result_comment({**job, "synthesis_md": "```\n" + "y\n" * 40_000}, "u")
+    assert "\n```\n\n… (cut" in fenced and fenced.endswith("(u)")
     failed = result_comment({"status": "failed", "requested_by": "alice",
-                             "error": "could not prepare the code: boom\ntrace"}, None)
-    assert failed == "@alice The manyeyes review failed: could not prepare the code: boom"
+                             "error": "could not prepare the code: boom @x\ntrace"}, None)
+    assert failed == "@alice The manyeyes review failed: could not prepare the code: boom @\u200bx"
+    crash = result_comment({"status": "failed", "error": "OSError: /data/work/x"}, None)
+    assert "/data" not in crash and "internal error" in crash
     assert "cancelled" in result_comment({"status": "cancelled"}, None)
+    no_synth = result_comment({**job, "synthesis_md": None, "result_md": "every review"}, None)
+    assert "synthesis is missing" in no_synth and "every review" not in no_synth
 
 
 def test_jwt_is_signed_with_the_app_key(settings):
@@ -84,11 +95,14 @@ class FakeGitHub:
         self.comments: list[tuple[str, int, str]] = []
         self.reactions: list[int] = []
 
+    slow = 0.0
+
     async def slug(self):
+        await asyncio.sleep(self.slow)
         return "manyeyes-bot"
 
-    async def installation_token(self, installation_id, repo):
-        assert installation_id == 7
+    async def installation_token(self, installation_id, repo, read_only=False):
+        assert installation_id == 7 and read_only
         return "inst-token"
 
     async def comment(self, installation_id, repo, number, body):
@@ -163,6 +177,35 @@ def test_tag_queues_a_review_and_answers_on_the_pull_request(app_settings, fake)
         assert f"https://example.org/me/#/jobs/{job_id}" in body
         # GitHub redelivers: no second job.
         assert send(c, payload()).json()["result"] == "ignored: repeated delivery"
+        wait(lambda: json.loads(c.app.state.store.get_job(job_id)["options_json"])
+             ["github"].get("answered") is True)
+    # The answer was recorded as sent: a restart does not post it again.
+    with TestClient(create_app(app_settings)):
+        time.sleep(0.3)
+    assert len(fake.comments) == 1
+
+
+def test_two_copies_of_one_delivery_at_once_make_one_job(app_settings, fake):
+    from concurrent.futures import ThreadPoolExecutor
+    fake.slow = 0.3
+    with TestClient(create_app(app_settings)) as c:
+        with ThreadPoolExecutor(2) as pool:
+            results = sorted(r.json()["result"].split()[0] for r in
+                             pool.map(lambda _: send(c, payload()), range(2)))
+        assert results == ["ignored:", "queued"]
+
+
+def test_cancel_of_a_queued_job_answers(app_settings, fake):
+    s = app_settings.with_layer("q", {"server.max_concurrent_jobs": 1})
+    with TestClient(create_app(s)) as c:
+        worker = c.app.state.worker
+        worker.tasks["blocker"] = None   # the queue is full: the job stays queued
+        job_id = send(c, payload()).json()["result"].split()[1]
+        assert c.post(f"/api/jobs/{job_id}/cancel",
+                      headers={"Authorization": "Bearer boot"}).status_code == 200
+        wait(lambda: fake.comments)
+        assert "was cancelled" in fake.comments[0][2]
+        worker.tasks.pop("blocker")
 
 
 @pytest.mark.parametrize("data,result", [
@@ -193,7 +236,8 @@ def test_limits_apply_to_the_commenter(app_settings, fake):
         assert send(c, payload(), delivery="a").json()["result"].startswith("queued")
         assert send(c, payload(), delivery="b").json()["result"] == "denied: limit"
         wait(lambda: len(fake.comments) == 2)
-        assert any("1 per day" in b or "limit" in b.lower() for _, _, b in fake.comments)
+        assert any(b.startswith("@alice limit reached: 1 reviews per day.")
+                   for _, _, b in fake.comments)
 
 
 def test_bad_signature_ping_and_off(app_settings, settings, fake):
@@ -204,6 +248,9 @@ def test_bad_signature_ping_and_off(app_settings, settings, fake):
         sig = "sha256=" + hmac.new(SECRET.encode(), raw, hashlib.sha256).hexdigest()
         assert c.post("/github/webhook", content=raw, headers={
             "X-GitHub-Event": "issue_comment", "X-Hub-Signature-256": sig}).status_code == 400
+        assert send(c, [1, 2]).status_code == 400
+        big = b"x" * (6 * 1024 * 1024)
+        assert c.post("/github/webhook", content=big).status_code == 413
     off = settings.with_layer("t", {"auth.bootstrap_token": "b", "auth.bootstrap_login": "alice"})
     with TestClient(create_app(off)) as c:
         assert send(c, payload()).status_code == 404

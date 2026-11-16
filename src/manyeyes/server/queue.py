@@ -56,6 +56,8 @@ class Worker:
         self._usage: asyncio.Task | None = None
         self.github = GitHubApp(settings)
         self._answers: set[asyncio.Task] = set()
+        self._answering: set[str] = set()
+        self._stopping = False
         from ..updates import UpdateInfo
         self.update_info = UpdateInfo()
 
@@ -83,8 +85,6 @@ class Worker:
 
     def start(self) -> None:
         # Close out jobs a crash left "running" first, so the sweep can clean their folders.
-        from_github = [j["id"] for j in self.store.list_jobs(500, status="running")
-                       if j.get("source") == "github"]
         n = self.store.reconcile_orphans()
         self._sweep_leftovers()
         if n:
@@ -95,16 +95,19 @@ class Worker:
         self._retention = asyncio.create_task(self._retention_loop(), name="manyeyes-retention")
         self._updates = asyncio.create_task(self._update_loop(), name="manyeyes-updates")
         self._usage = asyncio.create_task(self._usage_loop(), name="manyeyes-usage")
-        for job_id in from_github:   # tell the pull request that its review was lost
-            t = asyncio.create_task(self.answer_on_github(job_id))
-            self._answers.add(t)
-            t.add_done_callback(self._answers.discard)
+        # Answers that a stop or a crash kept from GitHub (in the last day) go out now.
+        for j in self.store.list_jobs(500):
+            if (j.get("source") == "github" and j["status"] in ("done", "failed", "cancelled")
+                    and (j.get("finished_at") or 0) > time.time() - 86400):
+                self._answer_later(j["id"])
 
     def notify(self) -> None:
         self._wake.set()
 
     async def stop(self) -> None:
-        loops = (self._loop, self._retention, self._updates, self._usage, *self.tasks.values())
+        self._stopping = True
+        loops = (self._loop, self._retention, self._updates, self._usage, *self.tasks.values(),
+                 *self._answers)
         for t in loops:
             if t is not None:
                 t.cancel()
@@ -123,11 +126,11 @@ class Worker:
             if j and j["status"] in ("queued", "running"):
                 self.store.update_job(job_id, status="cancelled", finished_at=time.time(),
                                       error="cancelled")
+                self._answer_later(job_id)
         else:
             self.store.update_job(job_id, status="cancelled", finished_at=time.time(),
                                   error="cancelled before start")
-            if job.get("source") == "github":
-                await self.answer_on_github(job_id)
+            self._answer_later(job_id)
         return True
 
     async def _run_loop(self) -> None:
@@ -160,8 +163,12 @@ class Worker:
         except asyncio.CancelledError:
             j = self.store.get_job(job["id"])
             if j and j["status"] == "running":
-                self.store.update_job(job["id"], status="cancelled", finished_at=time.time(),
-                                      error="cancelled")
+                if self._stopping:   # a deploy or restart, not a person
+                    self.store.update_job(job["id"], status="failed", finished_at=time.time(),
+                                          error="the server stopped while this job ran")
+                else:
+                    self.store.update_job(job["id"], status="cancelled",
+                                          finished_at=time.time(), error="cancelled")
         except Exception as e:  # noqa: BLE001
             log.exception("job %s crashed", job["id"])
             j = self.store.get_job(job["id"])
@@ -170,16 +177,30 @@ class Worker:
                                       error=f"{type(e).__name__}: {e}")
         finally:
             self.notify()
-            if job.get("source") == "github":
-                await self.answer_on_github(job["id"])
+            self._answer_later(job["id"])
+
+    def _answer_later(self, job_id: str) -> None:
+        """Answer on the pull request in its own task: the job's slot is free at once."""
+        if self._stopping or job_id in self._answering:
+            return
+        self._answering.add(job_id)
+        t = asyncio.create_task(self.answer_on_github(job_id), name=f"answer-{job_id}")
+        self._answers.add(t)
+        t.add_done_callback(self._answers.discard)
+        t.add_done_callback(lambda _t: self._answering.discard(job_id))
 
     async def answer_on_github(self, job_id: str) -> None:
-        """Post the end of a job started from a pull request comment to that pull request."""
+        """Post the end of a job started from a pull request comment to that pull request.
+
+        The job records the answer as sent. An answer that a stop or a crash cut
+        off goes out on the next start.
+        """
         job = self.store.get_job(job_id)
         if job is None or job.get("source") != "github":
             return
-        gh = json.loads(job.get("options_json") or "{}").get("github") or {}
-        if not gh or not self.github.configured:
+        opts = json.loads(job.get("options_json") or "{}")
+        gh = opts.get("github") or {}
+        if not gh or gh.get("answered") or not self.github.configured:
             return
         body = result_comment(job, job_url(self.base, job_id))
         try:
@@ -187,6 +208,10 @@ class Worker:
                                                        job["pr"], body), timeout=120)
         except Exception as e:  # noqa: BLE001 - the job result stays in the web UI
             log.warning("job %s: could not post the result to GitHub: %s", job_id, e)
+            gh["answered"] = "failed"   # do not post it again after a restart
+        else:
+            gh["answered"] = True
+        self.store.update_job(job_id, options_json=json.dumps({**opts, "github": gh}))
 
     async def _run(self, job: dict) -> None:
         s = effective_settings(self.base, self.store)
@@ -210,12 +235,15 @@ class Worker:
             else:
                 self.store.add_event(job["id"], "clone_started", {"repo": job["repo"]})
                 try:
-                    budget = min(float(s["limits.clone_timeout_s"]),
-                                 deadline - time.monotonic())
+                    prep_end = min(time.monotonic() + float(s["limits.clone_timeout_s"]),
+                                   deadline)
+                    budget = prep_s = prep_end - time.monotonic()
                     token = s["github.token"]
                     if opts.get("github"):
                         token = await asyncio.wait_for(self.github.installation_token(
-                            opts["github"]["installation"], job["repo"]), timeout=budget)
+                            opts["github"]["installation"], job["repo"], read_only=True),
+                            timeout=min(60.0, budget))
+                        budget = prep_end - time.monotonic()
                     task = await asyncio.wait_for(clone_review(
                         job["repo"], work, token=token,
                         timeout=budget, pr=job.get("pr"),
@@ -223,7 +251,7 @@ class Worker:
                         instructions=job.get("prompt") or ""), timeout=budget)
                 except TimeoutError:
                     self.store.update_job(job["id"], status="failed", finished_at=time.time(),
-                                          error=f"could not prepare the code within {int(budget)}s")
+                                          error=f"could not prepare the code within {int(prep_s)}s")
                     return
                 except (SourceError, GitHubAppError) as e:
                     self.store.update_job(job["id"], status="failed", finished_at=time.time(),

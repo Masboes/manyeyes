@@ -41,9 +41,13 @@ Put the ID and the secret in `secrets.env` (mode 600):
 ```
 MANYEYES_GITHUB_CLIENT_ID=Ov23...
 MANYEYES_GITHUB_CLIENT_SECRET=...
-MANYEYES_SYNTH_OPENAI_API_KEY=sk-...           # optional: the synthesis
-MANYEYES_GITHUB_TOKEN=github_pat_...           # optional: private repositories (read-only)
+# Optional: the synthesis.
+MANYEYES_SYNTH_OPENAI_API_KEY=sk-...
+# Optional: private repositories (read-only).
+MANYEYES_GITHUB_TOKEN=github_pat_...
 ```
+
+Put a comment on its own line. A `#` after a value becomes part of the value.
 
 For private repositories, a fine-grained personal access token with read-only `Contents` and `Pull requests` on the repositories you want reviewed is enough.
 
@@ -94,9 +98,9 @@ The tag is `@` plus the name of your App. After the tag comes an optional word `
 **Who can start a review.** Both conditions must be true:
 
 - The person is on the allowlist.
-- GitHub shows the person as an owner, member or collaborator of the repository.
+- GitHub marks the comment as written by the repository owner, a member of the organization that owns it, or a collaborator on it.
 
-Other comments do nothing. Strangers on a public repository cannot start reviews. A collaborator who is not on the allowlist gets a short answer. The per-person limits apply to the person who wrote the comment.
+Other comments do nothing. GitHub can mark a member who hides their organization membership as a contributor; such a person must make the membership public or be added as a collaborator. Strangers on a public repository cannot start reviews. A collaborator who is not on the allowlist gets a short answer. The per-person limits apply to the person who wrote the comment.
 
 **Requirement.** GitHub must reach the server over HTTPS. A server that only runs on an internal network cannot get the webhooks.
 
@@ -110,7 +114,7 @@ Your organization → Settings → Developer settings → GitHub Apps → New Gi
 | Homepage URL | `https://example.org/manyeyes/` |
 | Webhook URL | `https://example.org/manyeyes/github/webhook` |
 | Webhook secret | A long random string (`openssl rand -hex 32`) |
-| Repository permissions | Contents: read. Pull requests: read and write. Metadata: read (always on). |
+| Repository permissions | Contents: read. Issues: read and write. Pull requests: read and write. Metadata: read (always on). |
 | Subscribe to events | Issue comment |
 | Where can this GitHub App be installed? | Only on this account |
 
@@ -121,16 +125,19 @@ Then:
 3. Give the server the App ID (on the App page), the key and the webhook secret, in `secrets.env` or in your secret store:
 
 ```
+# The key file must be readable by the server only (mode 600).
 MANYEYES_GITHUB_APP_ID=123456
-MANYEYES_GITHUB_APP_PRIVATE_KEY_FILE=/data/github-app.pem    # mode 600
+MANYEYES_GITHUB_APP_PRIVATE_KEY_FILE=/data/github-app.pem
 MANYEYES_GITHUB_WEBHOOK_SECRET=...
 ```
 
-4. Restart the server. On the App's "Advanced" tab, the first delivery (a `ping`) shows a green tick when the server answered.
+4. Restart the server. On the App's "Advanced" tab, find the first delivery (a `ping`) and click "Redeliver". GitHub sent it when you created the App, before the server knew the App. The redelivery shows a green tick when the server answers.
 
-For each job, the server gets a token for that one repository from the App. It uses the token to clone the code and to post the comment. As with `MANYEYES_GITHUB_TOKEN`, no reviewer gets the token. A review started from a comment uses the App's token, not `MANYEYES_GITHUB_TOKEN`.
+For each job, the server gets tokens for that one repository from the App: a read-only token to clone the code, and a token to post the answer. As with `MANYEYES_GITHUB_TOKEN`, no reviewer gets a token. A review started from a comment uses the App's tokens, not `MANYEYES_GITHUB_TOKEN`.
 
-Set `MANYEYES_SERVER_PUBLIC_URLS`. The answer then links to the full result in the web UI.
+The answer holds the synthesis, or a short reason when the job failed. Details of an unexpected error stay on the job page. Set `MANYEYES_SERVER_PUBLIC_URLS`: the answer then links to the full result in the web UI.
+
+If you rename the App, restart the server: it reads the App name once.
 
 ## Resource limits
 
