@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-11-16
+
 ### Added
 - Review standards per repository. A `MANYEYES.md` file in the root of a repository, or in `.github/`, goes to every reviewer and to the synthesis as the repository's review standards. manyeyes reads it from the base branch, so a pull request cannot change the rules it is judged by. See "Review standards for your repository" in the README.
 
