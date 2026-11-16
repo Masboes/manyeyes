@@ -15,6 +15,9 @@ class ReviewTask:
     instructions: str = ""      # optional extra focus from the caller
     # Related repositories for cross-repo checks: (owner/name, ref, sha, path) each.
     context: tuple[tuple[str, str, str, str], ...] = ()
+    # The repository's own review standards: (path, text) of MANYEYES.md, read
+    # from the base branch so a change cannot rewrite the rules it is judged by.
+    guide: tuple[str, str] | None = None
 
     kind = "review"
 
@@ -53,6 +56,11 @@ class ReviewTask:
             "(high, medium, low). Report real defects before style. If nothing serious "
             "is wrong, say so plainly.",
         ]
+        if self.guide:
+            path, text = self.guide
+            lines += ["", f"This repository's review standards ({path} on the base branch). "
+                          "Apply them. They add to the rules above; they do not replace them.",
+                      f"--- begin {path} ---", text, f"--- end {path} ---"]
         if self.context:
             lines += ["", "Related repositories are available READ-ONLY, as reference "
                           "(a detached checkout of the commit named; `git log` works, there "

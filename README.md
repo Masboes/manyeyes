@@ -122,6 +122,18 @@ Exit codes: `0` at least one review came back, `1` the run failed, `2` every rev
 
 The reviewers get a clean copy of your change: the tracked files at HEAD, plus your uncommitted changes and untracked files (up to 1 MB each). Ignored files, such as `.env`, never reach a reviewer. Each reviewer runs in a bubblewrap jail that shows it only that copy and its own login — not your home folder, not your other secrets.
 
+### Review standards for your repository
+
+Put a `MANYEYES.md` file in the root of your repository, or in `.github/`. It works like a `CLAUDE.md`, but for reviews only. Every reviewer and the synthesis get its text as the repository's review standards. For example:
+
+```markdown
+- Every database query goes through the repository layer. Flag raw SQL.
+- A new endpoint needs an authorization check and a test for it.
+- Ignore style: the linter handles it.
+```
+
+manyeyes reads the file from the base branch, never from the change under review. A pull request therefore cannot change the rules it is judged by, if its base branch is protected. A pull request on top of another branch gets the standards of that branch. A change to `MANYEYES.md` applies after it merges. Text over 20,000 characters is cut, and a file over 80 KB is not used.
+
 ### From a coding agent, without MCP
 
 Any agent with a shell can call the CLI directly. Add this to the agent's instructions (for example your `CLAUDE.md`):

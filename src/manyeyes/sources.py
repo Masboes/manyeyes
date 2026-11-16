@@ -13,16 +13,20 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 
 from .engine.task import ReviewTask
+
+log = logging.getLogger(__name__)
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -58,6 +62,103 @@ def _check_ref(ref: str) -> str:
 
 # A branch or base may also be a commit: 7 to 40 hex characters.
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+
+# --- the repository's review standards -------------------------------------
+
+# A repository can hold review standards for manyeyes, like a CLAUDE.md for
+# reviews. They come from the base branch, never from the change itself.
+GUIDE_PATHS = ("MANYEYES.md", ".github/MANYEYES.md")
+GUIDE_MAX = 20_000                 # characters
+GUIDE_MAX_BYTES = 80_000           # a bigger file is not used at all
+GUIDE_TIMEOUT_S = 30.0             # the standards are optional: never stall a review
+
+
+def _guide_blobs(ls_tree: str) -> list[tuple[str, str]]:
+    """(path, blob sha) of each guide in `git ls-tree` output, in GUIDE_PATHS
+    order. Regular files only: never a symlink or a submodule."""
+    found: dict[str, str] = {}
+    for line in ls_tree.splitlines():
+        meta, _, path = line.partition("\t")
+        parts = meta.split()
+        if len(parts) == 3 and parts[0] in ("100644", "100755") and parts[1] == "blob":
+            found[path] = parts[2]
+    return [(p, found[p]) for p in GUIDE_PATHS if p in found]
+
+
+def _guide_text(path: str, raw: str) -> tuple[str, str] | None:
+    text = raw.strip()
+    if not text:
+        return None
+    if len(text) > GUIDE_MAX:
+        text = text[:GUIDE_MAX] + f"\n[cut: {path} is longer than {GUIDE_MAX} characters]"
+    return path, text
+
+
+def _guide_size(path: str, out: str) -> int:
+    """The blob size from `git cat-file -s` output; refuse an oversized guide."""
+    words = out.split()
+    if not words:
+        raise SourceError(f"git gave no size for {path}")
+    size = int(words[-1])
+    if size > GUIDE_MAX_BYTES:
+        raise SourceError(f"{path} is larger than {GUIDE_MAX_BYTES} bytes; not used")
+    return size
+
+
+def local_guide(root: Path, base: str) -> tuple[str, str] | None:
+    """The review standards at `base` in a local repository, or None.
+
+    Local objects only (GIT_NO_LAZY_FETCH, git 2.44 and later): a partial
+    clone that lacks the file gives no standards. An older git may fetch the
+    blob with the user's own remote and credentials, as the diff prefetch in
+    local_review already does on purpose.
+    An empty file falls through to the next path; a failed read stops.
+    """
+    env = {**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"}
+    end = time.monotonic() + GUIDE_TIMEOUT_S
+
+    def git(*args: str) -> str:
+        r = subprocess.run(["git", *SAFE_GIT, "-C", str(root), *args], env=env,
+                           stdin=subprocess.DEVNULL, capture_output=True, check=True,
+                           timeout=max(0.1, end - time.monotonic()))
+        return r.stdout.decode("utf-8", errors="replace")
+    try:
+        for path, sha in _guide_blobs(git("ls-tree", "--end-of-options", base, "--",
+                                          *GUIDE_PATHS)):
+            _guide_size(path, git("cat-file", "-s", sha))
+            guide = _guide_text(path, git("cat-file", "blob", sha))
+            if guide:
+                return guide
+    except (OSError, ValueError, SourceError, subprocess.SubprocessError) as e:
+        log.warning("cannot read the review standards at %s: %s", base, e)
+    return None
+
+
+async def clone_guide(dest: Path, base_ref: str, env: dict[str, str],
+                      timeout: float) -> tuple[str, str] | None:
+    """The review standards at `base_ref` in a partial clone, or None.
+
+    `cat-file -s` fetches a missing blob and gives its size, so the read that
+    follows is local and bounded. Best effort within `timeout`: a review
+    without the standards is better than no review.
+    """
+    end = time.monotonic() + timeout
+
+    async def git(*args: str) -> str:
+        left = end - time.monotonic()
+        if left <= 0:
+            raise SourceError("no time left")
+        return await _run(["git", "-C", str(dest), *args], env, left)
+    try:
+        for path, sha in _guide_blobs(await git("ls-tree", base_ref, "--", *GUIDE_PATHS)):
+            _guide_size(path, await git("cat-file", "-s", sha))
+            guide = _guide_text(path, await git("cat-file", "blob", sha))
+            if guide:
+                return guide
+    except (ValueError, SourceError) as e:
+        log.warning("cannot read the review standards at %s: %s", base_ref, e)
+    return None
 
 
 # --- local checkout -------------------------------------------------------
@@ -192,7 +293,8 @@ def local_review(path: Path, dest: Path, base: str | None = None,
     name = repo_name(root)
     return LocalSource(root, dest, ReviewTask(
         label=name, base_ref=base, base_sha=base_sha, head_ref=head_ref,
-        head_sha=head_sha, dirty=dirty, instructions=instructions), name)
+        head_sha=head_sha, dirty=dirty, instructions=instructions,
+        guide=local_guide(root, base)), name)
 
 
 # --- context repositories ---------------------------------------------------
@@ -529,6 +631,7 @@ async def clone_review(repo: str, dest: Path, *, token: str, timeout: float,
     reviewers find everything a review needs locally: inside the jail git has
     no token and lazy fetching is switched off.
     """
+    start = time.monotonic()   # `timeout` is also the caller's budget for all of this
     if not REPO_RE.match(repo or ""):
         raise SourceError(f"repo must look like owner/name, got {repo!r}")
     if pr is not None:
@@ -544,14 +647,15 @@ async def clone_review(repo: str, dest: Path, *, token: str, timeout: float,
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
     try:
-        return await _clone(repo, dest, env, timeout, pr, head, base, instructions)
+        return await _clone(repo, dest, env, timeout, pr, head, base, instructions, start)
     except BaseException:
         shutil.rmtree(dest, ignore_errors=True)
         raise
 
 
 async def _clone(repo: str, dest: Path, env: dict[str, str], timeout: float, pr: int | None,
-                 head: str, base: str | None, instructions: str) -> ReviewTask:
+                 head: str, base: str | None, instructions: str,
+                 start: float) -> ReviewTask:
     url = f"https://github.com/{repo}.git"
     await _run(["git", "init", "-q", str(dest)], env, timeout)
     await _run(["git", "-C", str(dest), "remote", "add", "origin", url], env, timeout)
@@ -592,4 +696,6 @@ async def _clone(repo: str, dest: Path, env: dict[str, str], timeout: float, pr:
                   await _run(["git", "-C", str(dest), "rev-parse", base_ref], env, timeout))
     return ReviewTask(label=label, base_ref=base_label, base_sha=base_sha,
                       head_ref=head if pr is None else f"PR #{pr} ({head})",
-                      head_sha=head_sha, instructions=instructions)
+                      head_sha=head_sha, instructions=instructions,
+                      guide=await clone_guide(dest, base_ref, env, min(
+                          GUIDE_TIMEOUT_S, timeout - (time.monotonic() - start) - 2)))
