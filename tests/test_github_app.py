@@ -64,11 +64,14 @@ def test_result_comment():
     assert out.endswith("---\n[Full result with every review](https://x/#/jobs/j1)")
     long = result_comment({**job, "synthesis_md": "x" * 100_000}, None)
     assert len(long) < 65_536 and long.endswith("too long for a comment)")
-    fenced = result_comment({**job, "synthesis_md": "```\n" + "y\n" * 40_000}, "u")
-    assert "\n```\n\n… (cut" in fenced and fenced.endswith("(u)")
+    fenced = result_comment({**job, "synthesis_md": "````md\n" + "y\n" * 40_000}, "u")
+    assert "\n````\n\n… (cut" in fenced and fenced.endswith("(u)")
+    mentions = result_comment({**job, "synthesis_md": "@a " * 30_000}, "u")
+    assert len(mentions) < 65_536
     failed = result_comment({"status": "failed", "requested_by": "alice",
-                             "error": "could not prepare the code: boom @x\ntrace"}, None)
-    assert failed == "@alice The manyeyes review failed: could not prepare the code: boom @\u200bx"
+                             "error": "could not prepare the code: git: /data/work/x"}, None)
+    assert failed == ("@alice The manyeyes review failed: manyeyes could not fetch the code "
+                      "of this pull request.")
     crash = result_comment({"status": "failed", "error": "OSError: /data/work/x"}, None)
     assert "/data" not in crash and "internal error" in crash
     assert "cancelled" in result_comment({"status": "cancelled"}, None)
@@ -108,6 +111,10 @@ class FakeGitHub:
     async def comment(self, installation_id, repo, number, body):
         self.comments.append((repo, number, body))
 
+    async def answer(self, installation_id, repo, number, body, marker, since):
+        self.comments.append((repo, number, body))
+        return True
+
     async def react(self, installation_id, repo, comment_id, content="eyes"):
         self.reactions.append(comment_id)
 
@@ -115,7 +122,7 @@ class FakeGitHub:
 @pytest.fixture
 def fake(monkeypatch):
     f = FakeGitHub()
-    for name in ("slug", "installation_token", "comment", "react"):
+    for name in ("slug", "installation_token", "comment", "answer", "react"):
         monkeypatch.setattr(GitHubApp, name, lambda self, *a, _n=name, **k: getattr(f, _n)(*a, **k))
 
     async def no_clone(*a, **k):
@@ -173,7 +180,7 @@ def test_tag_queues_a_review_and_answers_on_the_pull_request(app_settings, fake)
         assert fake.reactions == [99]
         repo, number, body = fake.comments[0]
         assert (repo, number) == ("acme/app", 5)
-        assert body.startswith("@alice The manyeyes review failed: could not prepare the code")
+        assert body.startswith("@alice The manyeyes review failed: manyeyes could not fetch")
         assert f"https://example.org/me/#/jobs/{job_id}" in body
         # GitHub redelivers: no second job.
         assert send(c, payload()).json()["result"] == "ignored: repeated delivery"
@@ -267,3 +274,84 @@ def test_restart_tells_the_pull_request(app_settings, fake):
     with TestClient(create_app(app_settings)):
         wait(lambda: fake.comments)
     assert "server restarted" in fake.comments[0][2]
+
+
+def test_a_stop_is_not_a_cancel_and_the_answer_waits_for_the_next_start(app_settings, fake):
+    s = app_settings.with_layer("slow", {"limits.reviewer_timeout_s": 60})
+    with TestClient(create_app(s)) as c:
+        store = c.app.state.store
+        job = store.create_job(kind="spar", source="github", requested_by="alice",
+                               repo="acme/app", pr=5, prompt="q", roster="codex:1@slow-30",
+                               options_json=json.dumps({"github": {"installation": 7}}))
+        c.app.state.worker.notify()
+        wait(lambda: store.get_job(job["id"])["status"] == "running")
+        time.sleep(0.5)
+    j = store.get_job(job["id"])
+    assert (j["status"], j["error"]) == ("failed", "the server stopped while this job ran")
+    assert fake.comments == []
+    with TestClient(create_app(s)):
+        wait(lambda: fake.comments)
+    assert "server restarted while the review ran" in fake.comments[0][2]
+
+
+# -- the GitHub calls themselves, against a fake GitHub API ---------------------------
+
+def real_app(settings, handler):
+    import httpx
+    app = GitHubApp(settings.with_layer("t", {"github_app.id": "42",
+                                              "github_app.private_key": rsa_pem(),
+                                              "github_app.webhook_secret": SECRET}))
+    app.transport = httpx.MockTransport(handler)
+    return app
+
+
+def test_answer_posts_once_with_a_marker(settings):
+    import httpx
+    calls, existing = [], []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append((req.method, req.url.path, json.loads(req.content or b"null")))
+        if req.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json={"token": "t"})
+        if req.method == "GET":
+            return httpx.Response(200, json=existing)
+        existing.append({"body": json.loads(req.content)["body"]})
+        return httpx.Response(201, json={})
+
+    app = real_app(settings, handler)
+    args = (7, "acme/app", 5, "hello", "<!-- manyeyes job j1 -->", "2026-01-01T00:00:00Z")
+    assert asyncio.run(app.answer(*args)) is True
+    assert existing == [{"body": "hello\n\n<!-- manyeyes job j1 -->"}]
+    assert calls[0][2] == {"repositories": ["app"]}         # a write token: no narrowing
+    assert asyncio.run(app.answer(*args)) is False          # the marker is there: no repost
+    assert len(existing) == 1
+    calls.clear()
+    asyncio.run(app.installation_token(7, "acme/app", read_only=True))
+    assert calls[0][2]["permissions"] == {"contents": "read", "pull_requests": "read"}
+
+
+def test_answer_errors(settings):
+    import httpx
+    status = {"post": 422}
+
+    def handler(req):
+        if req.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json={"token": "t"})
+        if req.method == "GET":
+            return httpx.Response(200, json=[])
+        return httpx.Response(status["post"])
+
+    app = real_app(settings, handler)
+    args = (7, "acme/app", 5, "b", "m", "s")
+    with pytest.raises(github_app.GitHubAppError) as e:
+        asyncio.run(app.answer(*args))
+    assert e.value.permanent
+    status["post"] = 502          # not retried (GitHub may have taken it), not permanent
+    with pytest.raises(github_app.GitHubAppError) as e:
+        asyncio.run(app.answer(*args))
+    assert not e.value.permanent
+    bad = GitHubApp(settings.with_layer("t", {"github_app.id": "1",
+                                              "github_app.private_key": "not a key",
+                                              "github_app.webhook_secret": SECRET}))
+    with pytest.raises(github_app.GitHubAppError, match="cannot sign"):
+        bad._jwt()

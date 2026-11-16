@@ -135,7 +135,7 @@ MANYEYES_GITHUB_WEBHOOK_SECRET=...
 
 For each job, the server gets tokens for that one repository from the App: a read-only token to clone the code, and a token to post the answer. As with `MANYEYES_GITHUB_TOKEN`, no reviewer gets a token. A review started from a comment uses the App's tokens, not `MANYEYES_GITHUB_TOKEN`.
 
-The answer holds the synthesis, or a short reason when the job failed. Details of an unexpected error stay on the job page. Set `MANYEYES_SERVER_PUBLIC_URLS`: the answer then links to the full result in the web UI.
+The answer holds the synthesis, or a short, fixed reason when the job failed. The details of a failure stay on the job page. When GitHub is down, the server tries again: twice at once, then at its next start, for jobs that ended in the last day. Set `MANYEYES_SERVER_PUBLIC_URLS`: the answer then links to the full result in the web UI.
 
 If you rename the App, restart the server: it reads the App name once.
 

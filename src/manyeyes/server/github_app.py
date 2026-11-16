@@ -46,7 +46,9 @@ MAX_BODY = 5 * 1024 * 1024
 
 
 class GitHubAppError(RuntimeError):
-    pass
+    def __init__(self, message: str, permanent: bool = False) -> None:
+        super().__init__(message)
+        self.permanent = permanent   # trying again cannot help
 
 
 @dataclass(frozen=True)
@@ -107,18 +109,29 @@ def _defuse_mentions(text: str) -> str:
 
 def _close_fences(text: str) -> str:
     """Close a code fence that a cut left open, so the text after it is not code."""
-    open_fence = None
+    fence = ""
     for ln in text.splitlines():
-        m = re.match(r"\s*(```|~~~)", ln)
-        if m:
-            open_fence = None if open_fence == m.group(1) else (open_fence or m.group(1))
-    return text + f"\n{open_fence}" if open_fence else text
+        m = re.match(r"\s{0,3}(`{3,}|~{3,})(.*)$", ln)
+        if not m:
+            continue
+        if not fence:
+            fence = m.group(1)
+        elif m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and \
+                not m.group(2).strip():
+            fence = ""
+    return f"{text}\n{fence}" if fence else text
 
 
-# Failure reasons that manyeyes itself writes. Others (exception text) can hold
-# paths or tool output and stay on the job page.
-_SAFE_ERRORS = ("could not prepare the code", "could not prepare the related repos",
-                "job timeout", "server restarted", "the server stopped", "cancelled")
+def _failure(error: str) -> str:
+    """A fixed, public summary of a failure. The raw reason (paths, tool output)
+    stays on the job page."""
+    if error.startswith("could not prepare the code"):
+        return "manyeyes could not fetch the code of this pull request."
+    if error.startswith("job timeout"):
+        return "the review ran past its time limit."
+    if error.startswith(("server restarted", "the server stopped")):
+        return "the server restarted while the review ran. Tag the App again to retry."
+    return "an internal error."
 
 
 def result_comment(job: dict[str, Any], job_url: str | None) -> str:
@@ -133,22 +146,19 @@ def result_comment(job: dict[str, Any], job_url: str | None) -> str:
             f"{who} manyeyes finished the review.".strip()
         if job.get("partial"):
             head += " Some reviewers did not finish; the result is partial."
-        room = MAX_COMMENT - len(head) - len(link) - 200
-        body = synthesis
+        # Defuse first, then cut: the cut sees the final length.
+        body = _defuse_mentions(synthesis)
+        room = MAX_COMMENT - len(head) - len(link) - 300
         if len(body) > room:
             body = _close_fences(body[:room].rstrip()) + \
                 "\n\n… (cut: the result is too long for a comment)"
-        body = _defuse_mentions(body)
         return "\n\n".join(p for p in (head, body, "---\n" + link if link else "") if p)
     if status == "done":
         msg = f"{who} manyeyes finished the review, but the synthesis is missing."
     elif status == "cancelled":
         msg = f"{who} The manyeyes review was cancelled."
     else:
-        error = (job.get("error") or "").splitlines()[0][:300] if job.get("error") else ""
-        if not error.startswith(_SAFE_ERRORS):
-            error = "an internal error (the job page has the details)"
-        msg = f"{who} The manyeyes review failed: {_defuse_mentions(error)}"
+        msg = f"{who} The manyeyes review failed: {_failure(job.get('error') or '')}"
     return "\n\n".join(p for p in (msg.strip(), link) if p)
 
 
@@ -161,6 +171,7 @@ class GitHubApp:
         self.webhook_secret = settings["github_app.webhook_secret"] or ""
         self._slug: str | None = None
         self._seen: OrderedDict[str, None] = OrderedDict()
+        self.transport: httpx.AsyncBaseTransport | None = None   # tests replace GitHub
 
     @property
     def configured(self) -> bool:
@@ -205,7 +216,7 @@ class GitHubApp:
         headers = {"Accept": "application/vnd.github+json",
                    "Authorization": f"Bearer {token}",
                    "X-GitHub-Api-Version": "2022-11-28"}
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, transport=self.transport) as client:
             for delay in (1.0, 3.0, None):
                 try:
                     r = await client.request(method, API + path, headers=headers, json=body)
@@ -251,6 +262,27 @@ class GitHubApp:
         if r.status_code != 201:
             raise GitHubAppError(f"GitHub returned {r.status_code} for a comment on "
                                  f"{repo}#{number}")
+
+    async def answer(self, installation_id: int, repo: str, number: int, body: str,
+                     marker: str, since: str) -> bool:
+        """Post `body` on the pull request, unless a comment that holds `marker`
+        (created after `since`) is there already. True when it posted.
+
+        The check makes a second try safe after an interrupted send that GitHub
+        took. A 404, 410 or 422 is permanent: the pull request or the App is gone.
+        """
+        token = await self.installation_token(installation_id, repo)
+        r = await self._call("GET", f"/repos/{repo}/issues/{int(number)}/comments"
+                             f"?per_page=100&since={since}", token)
+        if r.status_code == 200 and any(marker in (c.get("body") or "") for c in r.json()):
+            return False
+        r = await self._call("POST", f"/repos/{repo}/issues/{int(number)}/comments", token,
+                             {"body": f"{body}\n\n{marker}"}, once=True)
+        if r.status_code != 201:
+            raise GitHubAppError(f"GitHub returned {r.status_code} for a comment on "
+                                 f"{repo}#{number}",
+                                 permanent=r.status_code in (404, 410, 422))
+        return True
 
     async def react(self, installation_id: int, repo: str, comment_id: int,
                     content: str = "eyes") -> None:
@@ -345,11 +377,13 @@ def create_webhook_router(settings: Settings, store: Store, worker: Worker,
     async def webhook(request: Request) -> JSONResponse:
         if not gh.configured:
             raise HTTPException(404, "the GitHub App is not configured")
-        if int(request.headers.get("content-length") or 0) > MAX_BODY:
-            raise HTTPException(413, "body too large")
-        body = await request.body()
-        if len(body) > MAX_BODY:
-            raise HTTPException(413, "body too large")
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_BODY:
+                raise HTTPException(413, "body too large")
+            chunks.append(chunk)
+        body = b"".join(chunks)
         if not verify_signature(gh.webhook_secret, body,
                                 request.headers.get("x-hub-signature-256")):
             raise HTTPException(401, "bad signature")

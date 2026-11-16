@@ -95,11 +95,10 @@ class Worker:
         self._retention = asyncio.create_task(self._retention_loop(), name="manyeyes-retention")
         self._updates = asyncio.create_task(self._update_loop(), name="manyeyes-updates")
         self._usage = asyncio.create_task(self._usage_loop(), name="manyeyes-usage")
-        # Answers that a stop or a crash kept from GitHub (in the last day) go out now.
-        for j in self.store.list_jobs(500):
-            if (j.get("source") == "github" and j["status"] in ("done", "failed", "cancelled")
-                    and (j.get("finished_at") or 0) > time.time() - 86400):
-                self._answer_later(j["id"])
+        # Answers that a stop, a crash or a GitHub outage kept back go out now
+        # (jobs that ended in the last day; a later answer would only confuse).
+        for job_id in self.store.github_jobs_ended_since(time.time() - 86400):
+            self._answer_later(job_id)
 
     def notify(self) -> None:
         self._wake.set()
@@ -162,13 +161,13 @@ class Worker:
             await self._run(job)
         except asyncio.CancelledError:
             j = self.store.get_job(job["id"])
-            if j and j["status"] == "running":
-                if self._stopping:   # a deploy or restart, not a person
-                    self.store.update_job(job["id"], status="failed", finished_at=time.time(),
-                                          error="the server stopped while this job ran")
-                else:
-                    self.store.update_job(job["id"], status="cancelled",
-                                          finished_at=time.time(), error="cancelled")
+            # run_job may have saved "cancelled" already; a stop is not a person's cancel.
+            if j and self._stopping and j["status"] in ("running", "cancelled"):
+                self.store.update_job(job["id"], status="failed", finished_at=time.time(),
+                                      error="the server stopped while this job ran")
+            elif j and j["status"] == "running":
+                self.store.update_job(job["id"], status="cancelled",
+                                      finished_at=time.time(), error="cancelled")
         except Exception as e:  # noqa: BLE001
             log.exception("job %s crashed", job["id"])
             j = self.store.get_job(job["id"])
@@ -192,25 +191,39 @@ class Worker:
     async def answer_on_github(self, job_id: str) -> None:
         """Post the end of a job started from a pull request comment to that pull request.
 
-        The job records the answer as sent. An answer that a stop or a crash cut
-        off goes out on the next start.
+        The job records the answer as sent. A short GitHub problem gets two more
+        tries; an answer still unsent (or cut off by a stop or a crash) goes out
+        on the next start. A hidden marker in the comment keeps a retry from
+        posting it twice.
         """
         job = self.store.get_job(job_id)
-        if job is None or job.get("source") != "github":
+        if (job is None or job.get("source") != "github"
+                or job["status"] not in ("done", "failed", "cancelled")):
             return
         opts = json.loads(job.get("options_json") or "{}")
         gh = opts.get("github") or {}
         if not gh or gh.get("answered") or not self.github.configured:
             return
         body = result_comment(job, job_url(self.base, job_id))
-        try:
-            await asyncio.wait_for(self.github.comment(gh["installation"], job["repo"],
-                                                       job["pr"], body), timeout=120)
-        except Exception as e:  # noqa: BLE001 - the job result stays in the web UI
-            log.warning("job %s: could not post the result to GitHub: %s", job_id, e)
-            gh["answered"] = "failed"   # do not post it again after a restart
-        else:
-            gh["answered"] = True
+        marker = f"<!-- manyeyes job {job_id} -->"
+        since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(job["created_at"]))
+        for wait in (30, 120, None):
+            try:
+                await asyncio.wait_for(self.github.answer(
+                    int(gh["installation"]), job["repo"], int(job["pr"]), body, marker, since),
+                    timeout=120)
+                gh["answered"] = True
+                break
+            except Exception as e:  # noqa: BLE001 - the job result stays in the web UI
+                permanent = isinstance(e, (KeyError, TypeError, ValueError)) or \
+                    getattr(e, "permanent", False)
+                log.warning("job %s: could not post the result to GitHub: %s", job_id, e)
+                if permanent:
+                    gh["answered"] = "failed"
+                    break
+                if wait is None:
+                    return   # the next start tries again
+                await asyncio.sleep(wait)
         self.store.update_job(job_id, options_json=json.dumps({**opts, "github": gh}))
 
     async def _run(self, job: dict) -> None:
@@ -240,9 +253,12 @@ class Worker:
                     budget = prep_s = prep_end - time.monotonic()
                     token = s["github.token"]
                     if opts.get("github"):
-                        token = await asyncio.wait_for(self.github.installation_token(
-                            opts["github"]["installation"], job["repo"], read_only=True),
-                            timeout=min(60.0, budget))
+                        try:
+                            token = await asyncio.wait_for(self.github.installation_token(
+                                opts["github"]["installation"], job["repo"], read_only=True),
+                                timeout=min(60.0, budget))
+                        except TimeoutError as e:
+                            raise GitHubAppError("GitHub gave no App token in time") from e
                         budget = prep_end - time.monotonic()
                     task = await asyncio.wait_for(clone_review(
                         job["repo"], work, token=token,

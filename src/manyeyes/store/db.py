@@ -172,6 +172,13 @@ class Store:
                            (FAILED, "server restarted while this job was running",
                             time.time(), RUNNING))
 
+    def github_jobs_ended_since(self, since: float) -> list[str]:
+        """Jobs from a pull request comment that ended after `since`, oldest first."""
+        rows = self._all("SELECT id FROM jobs WHERE source='github' AND status IN (?,?,?) "
+                         "AND finished_at > ? ORDER BY finished_at",
+                         ("done", FAILED, "cancelled", since))
+        return [r["id"] for r in rows]
+
     def delete_job(self, job_id: str, keep_telemetry: bool = True) -> bool:
         with self._lock, self._conn() as c:
             if keep_telemetry:
