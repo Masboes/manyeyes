@@ -70,7 +70,7 @@ SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 # reviews. They come from the base branch, never from the change itself.
 GUIDE_PATHS = ("MANYEYES.md", ".github/MANYEYES.md")
 GUIDE_MAX = 20_000                 # characters
-GUIDE_MAX_BYTES = GUIDE_MAX * 4    # UTF-8: enough bytes for GUIDE_MAX characters
+GUIDE_MAX_BYTES = 80_000           # a bigger file is not used at all
 GUIDE_TIMEOUT_S = 30.0             # the standards are optional: never stall a review
 
 
@@ -86,13 +86,21 @@ def _guide_blobs(ls_tree: str) -> list[tuple[str, str]]:
     return [(p, found[p]) for p in GUIDE_PATHS if p in found]
 
 
-def _guide_text(path: str, raw: bytes) -> tuple[str, str] | None:
-    text = raw[:GUIDE_MAX_BYTES].decode("utf-8", errors="replace").strip()
+def _guide_text(path: str, raw: str) -> tuple[str, str] | None:
+    text = raw.strip()
     if not text:
         return None
-    if len(raw) > GUIDE_MAX_BYTES or len(text) > GUIDE_MAX:
+    if len(text) > GUIDE_MAX:
         text = text[:GUIDE_MAX] + f"\n[cut: {path} is longer than {GUIDE_MAX} characters]"
     return path, text
+
+
+def _guide_size(path: str, out: str) -> int:
+    """The blob size from `git cat-file -s` output; refuse an oversized guide."""
+    size = int(out.split()[-1])
+    if size > GUIDE_MAX_BYTES:
+        raise SourceError(f"{path} is larger than {GUIDE_MAX_BYTES} bytes; not used")
+    return size
 
 
 def local_guide(root: Path, base: str) -> tuple[str, str] | None:
@@ -100,81 +108,51 @@ def local_guide(root: Path, base: str) -> tuple[str, str] | None:
 
     Local objects only (GIT_NO_LAZY_FETCH): a partial clone that lacks the
     file gives no standards rather than a fetch with the repository's config.
+    An empty file falls through to the next path; a failed read stops.
     """
     env = {**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"}
-    git = ["git", *SAFE_GIT, "-C", str(root)]
+    end = time.monotonic() + GUIDE_TIMEOUT_S
+
+    def git(*args: str) -> str:
+        r = subprocess.run(["git", *SAFE_GIT, "-C", str(root), *args], env=env,
+                           stdin=subprocess.DEVNULL, capture_output=True, check=True,
+                           timeout=max(0.1, end - time.monotonic()))
+        return r.stdout.decode("utf-8", errors="replace")
     try:
-        ls = subprocess.run([*git, "ls-tree", "--end-of-options", base, "--", *GUIDE_PATHS],
-                            env=env, stdin=subprocess.DEVNULL, capture_output=True,
-                            check=True, timeout=GUIDE_TIMEOUT_S).stdout
-        for path, sha in _guide_blobs(ls.decode(errors="replace")):
-            proc = subprocess.Popen([*git, "cat-file", "blob", sha], env=env,
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL)
-            try:
-                raw = proc.stdout.read(GUIDE_MAX_BYTES + 1)
-            finally:
-                proc.kill()
-                proc.wait(timeout=5)
-                proc.stdout.close()
-            guide = _guide_text(path, raw) if raw else None
+        for path, sha in _guide_blobs(git("ls-tree", "--end-of-options", base, "--",
+                                          *GUIDE_PATHS)):
+            _guide_size(path, git("cat-file", "-s", sha))
+            guide = _guide_text(path, git("cat-file", "blob", sha))
             if guide:
                 return guide
-    except (OSError, subprocess.SubprocessError) as e:
+    except (OSError, ValueError, SourceError, subprocess.SubprocessError) as e:
         log.warning("cannot read the review standards at %s: %s", base, e)
     return None
-
-
-async def _read_blob(dest: Path, sha: str, env: dict[str, str], timeout: float) -> bytes:
-    """Up to GUIDE_MAX_BYTES + 1 bytes of a blob; git fetches it if it is missing."""
-    proc = await asyncio.create_subprocess_exec(
-        "git", "-C", str(dest), "cat-file", "blob", sha, env=env,
-        stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
-
-    async def collect() -> bytes:
-        buf = bytearray()
-        while len(buf) <= GUIDE_MAX_BYTES:
-            chunk = await proc.stdout.read(65536)
-            if not chunk:
-                break
-            buf += chunk
-        return bytes(buf[:GUIDE_MAX_BYTES + 1])
-    try:
-        raw = await asyncio.wait_for(collect(), timeout=timeout)
-        if len(raw) <= GUIDE_MAX_BYTES:
-            await asyncio.wait_for(proc.wait(), timeout=5)
-            if proc.returncode != 0:
-                raise SourceError(f"git cat-file exited {proc.returncode}")
-        return raw
-    finally:
-        if proc.returncode is None:
-            await _kill_group(proc)
 
 
 async def clone_guide(dest: Path, base_ref: str, env: dict[str, str],
                       timeout: float) -> tuple[str, str] | None:
     """The review standards at `base_ref` in a partial clone, or None.
 
-    Best effort within `timeout`: a review without the standards is better
-    than no review.
+    `cat-file -s` fetches a missing blob and gives its size, so the read that
+    follows is local and bounded. Best effort within `timeout`: a review
+    without the standards is better than no review.
     """
     end = time.monotonic() + timeout
+
+    async def git(*args: str) -> str:
+        left = end - time.monotonic()
+        if left <= 0:
+            raise SourceError("no time left")
+        return await _run(["git", "-C", str(dest), *args], env, left)
     try:
-        if timeout < 1:
-            raise TimeoutError
-        ls = await _run(["git", "-C", str(dest), "ls-tree", base_ref, "--", *GUIDE_PATHS],
-                        env, timeout)
-        for path, sha in _guide_blobs(ls):
-            left = end - time.monotonic()
-            if left <= 0:
-                raise TimeoutError
-            guide = _guide_text(path, await _read_blob(dest, sha, env, left))
+        for path, sha in _guide_blobs(await git("ls-tree", base_ref, "--", *GUIDE_PATHS)):
+            _guide_size(path, await git("cat-file", "-s", sha))
+            guide = _guide_text(path, await git("cat-file", "blob", sha))
             if guide:
                 return guide
-    except (SourceError, TimeoutError) as e:
-        log.warning("cannot read the review standards at %s: %s", base_ref,
-                    str(e) or "timed out")
+    except (ValueError, SourceError) as e:
+        log.warning("cannot read the review standards at %s: %s", base_ref, e)
     return None
 
 

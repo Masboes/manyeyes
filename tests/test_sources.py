@@ -464,13 +464,17 @@ def test_local_guide_never_fetches(repo, tmp_path):
 
 async def test_clone_guide_bounds_size_and_time(repo, tmp_path):
     from manyeyes import sources
-    big = "y" * (sources.GUIDE_MAX_BYTES * 2)
-    _commit_on(repo, "main", {"MANYEYES.md": big}, "huge")
     env = sources.git_auth_env("")
+    _commit_on(repo, "main", {"MANYEYES.md": "y" * (sources.GUIDE_MAX + 50)}, "long")
     path, text = await sources.clone_guide(repo, "main", env, 30)
-    assert len(text) < sources.GUIDE_MAX + 100 and "[cut:" in text
+    assert text.startswith("y" * sources.GUIDE_MAX) and "[cut:" in text
+    # Too big to read at all: not used, by either path.
+    _commit_on(repo, "main", {"MANYEYES.md": "y" * (sources.GUIDE_MAX_BYTES + 1)}, "huge")
+    assert await sources.clone_guide(repo, "main", env, 30) is None
+    assert sources.local_guide(repo, "main") is None
 
     # A git whose cat-file hangs: the read gives up in time and kills it.
+    _commit_on(repo, "main", {"MANYEYES.md": "rules\n"}, "small")
     real_git = shutil.which("git")
     fake = tmp_path / "bin"
     fake.mkdir()
@@ -482,3 +486,18 @@ async def test_clone_guide_bounds_size_and_time(repo, tmp_path):
     assert await sources.clone_guide(repo, "main", slow, 1.5) is None
     assert time.monotonic() - t < 8
     assert await sources.clone_guide(repo, "main", env, 0) is None
+
+
+async def test_failed_read_stops_the_lookup(repo, tmp_path):
+    # A failing cat-file must not give partial text, nor fall back to .github/.
+    from manyeyes import sources
+    _commit_on(repo, "main", {"MANYEYES.md": "root\n", ".github/MANYEYES.md": "gh\n"}, "g")
+    real_git = shutil.which("git")
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "git").write_text(f'#!/bin/sh\ncase "$*" in *"cat-file blob"*) echo partial; '
+                              f'exit 1;; esac\nexec {real_git} "$@"\n')
+    (fake / "git").chmod(0o755)
+    env = sources.git_auth_env("")
+    env["PATH"] = f"{fake}:{env['PATH']}"
+    assert await sources.clone_guide(repo, "main", env, 30) is None
