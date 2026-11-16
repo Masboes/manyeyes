@@ -262,8 +262,9 @@ class Runner:
                     run.usage = first.usage.add(run.usage)   # and all its tokens
                 if run.outcome not in (Outcome.RATE_LIMITED, Outcome.AUTH_FAILED):
                     return run
-                if run.outcome == Outcome.RATE_LIMITED and plan_limit(
-                        f"{run.failure_reason}\n{run.failure_detail}"):
+                # failure_reason comes from the CLI's own error event or stderr;
+                # failure_detail can hold stdout, which is the reviewed code.
+                if run.outcome == Outcome.RATE_LIMITED and plan_limit(run.failure_reason):
                     until = self.pool.rest(login, settings=self.s)
                 else:
                     until = None   # a passing 429 or an expired login: no rest
