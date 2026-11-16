@@ -75,35 +75,23 @@ def _fence_closes(line: str, fence: str) -> bool:
                 and not m.group(2).strip())
 
 
-def _strip_code(text: str) -> str:
-    """The text without fenced blocks (an unclosed one runs to the end) and inline code."""
-    out, fence = [], ""
-    for ln in text.splitlines():
-        if fence:
-            if _fence_closes(ln, fence):
-                fence = ""
-            continue
-        fence = _fence_opens(ln)
-        if not fence:
-            out.append(re.sub(r"`[^`]*`", " ", ln))
-    return "\n".join(out)
-
-
 def parse_command(body: str, slug: str) -> Command | None:
-    """The command in a comment that tags `@slug`, or None when it does not tag it.
+    """The command in a comment that starts with `@slug`, or None.
 
-    Quoted lines (`> ...`) and code (fenced blocks, `inline`) do not count, so a
-    reply that quotes an older request, or a comment that shows how to use the
-    App, does not start a review. The text after the tag is the instruction: an
-    optional word "review", an optional mode (quick, full, deep), then free text
-    that goes to the reviewers as the focus.
+    The tag must open the comment: its first line that is not blank and not a
+    quote (`> ...`). So a reply that quotes an older request, or a comment that
+    shows how to use the App in code, does not start a review. The text after
+    the tag is the instruction: an optional word "review", an optional mode
+    (quick, full, deep), then free text that goes to the reviewers as the focus.
     """
     if not slug:
         return None
-    tag = re.compile(rf"(?<![\w@/.-])@{re.escape(slug)}(?![\w-])", re.IGNORECASE)
-    lines = [ln for ln in (body or "").splitlines() if not ln.lstrip().startswith(">")]
-    text = _strip_code("\n".join(lines))
-    m = tag.search(text)
+    lines = [ln for ln in (body or "").splitlines()
+             if ln.strip() and not ln.lstrip().startswith(">")]
+    if not lines:
+        return None
+    text = "\n".join(lines)
+    m = re.match(rf" {{0,3}}@{re.escape(slug)}(?![\w-])", text, re.IGNORECASE)
     if m is None:
         return None
     rest = text[m.end():].lstrip(" \t,:;.-")
@@ -150,8 +138,8 @@ def _open_fence(text: str) -> str:
 
 def _cut(text: str, room: int) -> str:
     """At most `room` characters of the text, with an open code fence closed, so
-    the notice after it is not code."""
-    cut = text[:room].rstrip()
+    the text after it is not code."""
+    cut = text[:room].rstrip() if len(text) > room else text
     fence = _open_fence(cut)
     if fence:
         cut = text[:max(0, room - len(fence) - 1)].rstrip()
@@ -164,6 +152,8 @@ def _failure(error: str) -> str:
     stays on the job page."""
     if error.startswith("could not prepare the code"):
         return "manyeyes could not fetch the code of this pull request."
+    if error.startswith("could not prepare the related repos"):
+        return "manyeyes could not fetch a related repository."
     if error.startswith("job timeout"):
         return "the review ran past its time limit."
     if error.startswith(("server restarted", "the server stopped")):
@@ -189,8 +179,10 @@ def result_comment(job: dict[str, Any], job_url: str | None) -> str:
         # Defuse first, then cut: the cut sees the final length.
         body = _defuse_mentions(synthesis)
         room = MAX_COMMENT - len(head) - len(link) - 300
+        cut = _cut(body, room)
         if len(body) > room:
-            body = _cut(body, room) + "\n\n… (cut: the result is too long for a comment)"
+            cut += "\n\n… (cut: the result is too long for a comment)"
+        body = cut
         return "\n\n".join(p for p in (head, body, "---\n" + link if link else "") if p)
     if status == "done":
         msg = f"{who} manyeyes finished the review, but the synthesis is missing."
@@ -290,8 +282,9 @@ class GitHubApp:
         r = await self._call("POST", f"/app/installations/{int(installation_id)}/access_tokens",
                              self._jwt(), body)
         if r.status_code != 201:
+            # 404: the App is no longer installed there.
             raise GitHubAppError(f"GitHub returned {r.status_code} for an installation "
-                                 f"token for {repo}")
+                                 f"token for {repo}", permanent=r.status_code == 404)
         try:
             return str(r.json()["token"])
         except (ValueError, KeyError, TypeError) as e:

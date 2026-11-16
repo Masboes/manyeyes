@@ -29,19 +29,23 @@ def rsa_pem() -> str:
 @pytest.mark.parametrize("body,want", [
     ("@manyeyes-bot", ("full", "")),
     ("@ManyEyes-Bot review", ("full", "")),
-    ("please @manyeyes-bot review quick: look at auth", ("quick", "look at auth")),
-    ("@manyeyes-bot deep\nmind the migrations", ("deep", "mind the migrations")),
+    ("@manyeyes-bot review quick: look at auth", ("quick", "look at auth")),
+    ("\n  @manyeyes-bot deep\nmind the migrations", ("deep", "mind the migrations")),
     ("@manyeyes-bot check the cache", ("full", "check the cache")),
+    ("@manyeyes-bot, review quick", ("quick", "")),
+    ("> earlier text\n@manyeyes-bot quick", ("quick", "")),
     ("> @manyeyes-bot review\nthanks!", None),
+    ("please @manyeyes-bot review", None),
     ("@manyeyes-botty review", None),
     ("mail me@manyeyes-bot", None),
     ("ping @other", None),
-    ("@manyeyes-bot, review quick", ("quick", "")),
     ("Use `@manyeyes-bot review` to start one.", None),
-    ("Example:\n```\n@manyeyes-bot review deep\n```\nok", None),
-    ("Unclosed:\n```\n@manyeyes-bot review", None),
-    ("```x```\n@manyeyes-bot quick", ("quick", "")),
+    ("``@manyeyes-bot review``", None),
+    ("    @manyeyes-bot review", None),
+    ("```\n@manyeyes-bot review deep\n```", None),
+    ("- example:\n  ```\n  @manyeyes-bot review\n  ```", None),
 ])
+
 def test_parse_command(body, want):
     cmd = parse_command(body, "manyeyes-bot")
     assert (None if cmd is None else (cmd.mode, cmd.focus)) == want
@@ -80,6 +84,8 @@ def test_result_comment():
     crash = result_comment({"status": "failed", "error": "OSError: /data/work/x"}, None)
     assert "/data" not in crash and "internal error" in crash
     assert "cancelled" in result_comment({"status": "cancelled"}, None)
+    short = result_comment({**job, "synthesis_md": "```\nopen"}, "u")
+    assert "open\n```\n\n---" in short
     no_synth = result_comment({**job, "synthesis_md": None, "result_md": "every review"}, None)
     assert "synthesis is missing" in no_synth and "every review" not in no_synth
 

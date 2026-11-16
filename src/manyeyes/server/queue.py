@@ -210,7 +210,8 @@ class Worker:
             return
         body = result_comment(job, job_url(self.base, job_id))
         marker = f"<!-- manyeyes job {job_id} -->"
-        since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(job["created_at"]))
+        # 10 minutes early: the server clock and GitHub's may differ.
+        since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(job["created_at"] - 600))
         try:
             where = (int(gh["installation"]), str(job["repo"]), int(job["pr"]))
         except (KeyError, TypeError, ValueError):

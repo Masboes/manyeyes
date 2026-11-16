@@ -93,7 +93,7 @@ With a GitHub App, a person can start a review from a pull request. They tag the
 @your-app-name review deep: check the migrations
 ```
 
-The tag is `@` plus the name of your App. After the tag comes an optional word `review`, an optional mode (`quick`, `full` or `deep`; the default is `full`), and then free text that the reviewers get as the focus. Quoted lines (`> ...`) do not count.
+The tag is `@` plus the name of your App. Start the comment with the tag: a tag later in the comment, in code or in a quote (`> ...`) does nothing, so examples and replies cannot start a review by accident. After the tag comes an optional word `review`, an optional mode (`quick`, `full` or `deep`; the default is `full`), and then free text that the reviewers get as the focus.
 
 **Who can start a review.** Both conditions must be true:
 
