@@ -57,7 +57,36 @@ class Command:
     focus: str
 
 
-_CODE = re.compile(r"^\s*(```|~~~).*?^\s*\1[^\n]*$|`[^`\n]*`", re.MULTILINE | re.DOTALL)
+_FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def _fence_opens(line: str) -> str:
+    """The fence a line opens ("" when it opens none). A backtick fence's info
+    string holds no backtick, so ```x``` on one line is inline code."""
+    m = _FENCE.match(line)
+    if not m or (m.group(1)[0] == "`" and "`" in m.group(2)):
+        return ""
+    return m.group(1)
+
+
+def _fence_closes(line: str, fence: str) -> bool:
+    m = _FENCE.match(line)
+    return bool(m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence)
+                and not m.group(2).strip())
+
+
+def _strip_code(text: str) -> str:
+    """The text without fenced blocks (an unclosed one runs to the end) and inline code."""
+    out, fence = [], ""
+    for ln in text.splitlines():
+        if fence:
+            if _fence_closes(ln, fence):
+                fence = ""
+            continue
+        fence = _fence_opens(ln)
+        if not fence:
+            out.append(re.sub(r"`[^`]*`", " ", ln))
+    return "\n".join(out)
 
 
 def parse_command(body: str, slug: str) -> Command | None:
@@ -73,7 +102,7 @@ def parse_command(body: str, slug: str) -> Command | None:
         return None
     tag = re.compile(rf"(?<![\w@/.-])@{re.escape(slug)}(?![\w-])", re.IGNORECASE)
     lines = [ln for ln in (body or "").splitlines() if not ln.lstrip().startswith(">")]
-    text = _CODE.sub(" ", "\n".join(lines))
+    text = _strip_code("\n".join(lines))
     m = tag.search(text)
     if m is None:
         return None
@@ -107,19 +136,27 @@ def _defuse_mentions(text: str) -> str:
     return re.sub(r"@(?=[A-Za-z0-9])", "@\u200b", text)
 
 
-def _close_fences(text: str) -> str:
-    """Close a code fence that a cut left open, so the text after it is not code."""
+def _open_fence(text: str) -> str:
+    """The fence that is still open at the end of the text ("" when none)."""
     fence = ""
     for ln in text.splitlines():
-        m = re.match(r"\s{0,3}(`{3,}|~{3,})(.*)$", ln)
-        if not m:
-            continue
-        if not fence:
-            fence = m.group(1)
-        elif m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and \
-                not m.group(2).strip():
-            fence = ""
-    return f"{text}\n{fence}" if fence else text
+        if fence:
+            if _fence_closes(ln, fence):
+                fence = ""
+        else:
+            fence = _fence_opens(ln)
+    return fence
+
+
+def _cut(text: str, room: int) -> str:
+    """At most `room` characters of the text, with an open code fence closed, so
+    the notice after it is not code."""
+    cut = text[:room].rstrip()
+    fence = _open_fence(cut)
+    if fence:
+        cut = text[:max(0, room - len(fence) - 1)].rstrip()
+        fence = _open_fence(cut)
+    return f"{cut}\n{fence}" if fence else cut
 
 
 def _failure(error: str) -> str:
@@ -131,6 +168,9 @@ def _failure(error: str) -> str:
         return "the review ran past its time limit."
     if error.startswith(("server restarted", "the server stopped")):
         return "the server restarted while the review ran. Tag the App again to retry."
+    m = re.match(r"all (\d+) reviewers failed \(\d+ ([a-z ]+)\)", error)
+    if m:   # the counts and the outcome name come from manyeyes, not from tool output
+        return f"all {m.group(1)} reviewers failed (mostly: {m.group(2)})."
     return "an internal error."
 
 
@@ -150,8 +190,7 @@ def result_comment(job: dict[str, Any], job_url: str | None) -> str:
         body = _defuse_mentions(synthesis)
         room = MAX_COMMENT - len(head) - len(link) - 300
         if len(body) > room:
-            body = _close_fences(body[:room].rstrip()) + \
-                "\n\n… (cut: the result is too long for a comment)"
+            body = _cut(body, room) + "\n\n… (cut: the result is too long for a comment)"
         return "\n\n".join(p for p in (head, body, "---\n" + link if link else "") if p)
     if status == "done":
         msg = f"{who} manyeyes finished the review, but the synthesis is missing."
@@ -253,7 +292,10 @@ class GitHubApp:
         if r.status_code != 201:
             raise GitHubAppError(f"GitHub returned {r.status_code} for an installation "
                                  f"token for {repo}")
-        return str(r.json()["token"])
+        try:
+            return str(r.json()["token"])
+        except (ValueError, KeyError, TypeError) as e:
+            raise GitHubAppError("GitHub sent an unreadable installation token") from e
 
     async def comment(self, installation_id: int, repo: str, number: int, body: str) -> None:
         token = await self.installation_token(installation_id, repo)
@@ -272,17 +314,36 @@ class GitHubApp:
         took. A 404, 410 or 422 is permanent: the pull request or the App is gone.
         """
         token = await self.installation_token(installation_id, repo)
-        r = await self._call("GET", f"/repos/{repo}/issues/{int(number)}/comments"
-                             f"?per_page=100&since={since}", token)
-        if r.status_code == 200 and any(marker in (c.get("body") or "") for c in r.json()):
+        path = f"/repos/{repo}/issues/{int(number)}/comments"
+        if await self._has_marker(token, path, marker, since):
             return False
-        r = await self._call("POST", f"/repos/{repo}/issues/{int(number)}/comments", token,
-                             {"body": f"{body}\n\n{marker}"}, once=True)
+        r = await self._call("POST", path, token, {"body": f"{body}\n\n{marker}"}, once=True)
         if r.status_code != 201:
+            # 404 and 410: the pull request or the App is gone. A 422 can be a
+            # temporary spam block, so it is not permanent.
             raise GitHubAppError(f"GitHub returned {r.status_code} for a comment on "
-                                 f"{repo}#{number}",
-                                 permanent=r.status_code in (404, 410, 422))
+                                 f"{repo}#{number}", permanent=r.status_code in (404, 410))
         return True
+
+    async def _has_marker(self, token: str, path: str, marker: str, since: str) -> bool:
+        """Whether a comment created after `since` holds `marker`. Any doubt raises:
+        posting without knowing could post the answer twice."""
+        for page in range(1, 51):
+            r = await self._call("GET", f"{path}?per_page=100&page={page}&since={since}", token)
+            if r.status_code in (404, 410):
+                raise GitHubAppError(f"GitHub returned {r.status_code} for the comments",
+                                     permanent=True)
+            if r.status_code != 200:
+                raise GitHubAppError(f"GitHub returned {r.status_code} for the comments")
+            try:
+                rows = r.json()
+                if any(marker in (c.get("body") or "") for c in rows):
+                    return True
+            except (ValueError, AttributeError, TypeError) as e:
+                raise GitHubAppError("GitHub sent an unreadable comment list") from e
+            if len(rows) < 100:
+                return False
+        raise GitHubAppError("too many comments to check for an earlier answer")
 
     async def react(self, installation_id: int, repo: str, comment_id: int,
                     content: str = "eyes") -> None:
@@ -342,16 +403,15 @@ def create_webhook_router(settings: Settings, store: Store, worker: Worker,
             slug = await gh.slug()
         except GitHubAppError as e:
             raise HTTPException(502, str(e)) from e
+        # Strangers stop here, before any parsing of their text.
+        if comment.get("author_association") not in TRUSTED_ASSOCIATIONS:
+            return "ignored: not a collaborator"
         cmd = parse_command(comment.get("body") or "", slug)
         if cmd is None:
             return "ignored: the App is not tagged"
         login = str(sender.get("login") or "")
         repo = str(p["repository"]["full_name"])
         number, inst = int(issue["number"]), int(p["installation"]["id"])
-        if comment.get("author_association") not in TRUSTED_ASSOCIATIONS:
-            log.debug("GitHub App: %s tagged the App on %s#%s but is not a collaborator",
-                     login, repo, number)
-            return "ignored: not a collaborator"
         if not auth.allowlist.allows(login):
             store.audit(login, "github_denied", {"repo": repo, "pr": number})
             later(gh.comment(inst, repo, number,

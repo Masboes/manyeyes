@@ -58,6 +58,7 @@ class Worker:
         self._answers: set[asyncio.Task] = set()
         self._answering: set[str] = set()
         self._stopping = False
+        self._user_cancels: set[str] = set()
         from ..updates import UpdateInfo
         self.update_info = UpdateInfo()
 
@@ -118,6 +119,8 @@ class Worker:
             return False
         task = self.tasks.get(job_id)
         if task is not None:
+            self._user_cancels.add(job_id)
+            task.add_done_callback(lambda _t: self._user_cancels.discard(job_id))
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             # A task cancelled before its first step never ran its own cleanup.
@@ -162,7 +165,8 @@ class Worker:
         except asyncio.CancelledError:
             j = self.store.get_job(job["id"])
             # run_job may have saved "cancelled" already; a stop is not a person's cancel.
-            if j and self._stopping and j["status"] in ("running", "cancelled"):
+            if (j and self._stopping and job["id"] not in self._user_cancels
+                    and j["status"] in ("running", "cancelled")):
                 self.store.update_job(job["id"], status="failed", finished_at=time.time(),
                                       error="the server stopped while this job ran")
             elif j and j["status"] == "running":
@@ -207,18 +211,22 @@ class Worker:
         body = result_comment(job, job_url(self.base, job_id))
         marker = f"<!-- manyeyes job {job_id} -->"
         since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(job["created_at"]))
+        try:
+            where = (int(gh["installation"]), str(job["repo"]), int(job["pr"]))
+        except (KeyError, TypeError, ValueError):
+            where = None
         for wait in (30, 120, None):
             try:
-                await asyncio.wait_for(self.github.answer(
-                    int(gh["installation"]), job["repo"], int(job["pr"]), body, marker, since),
-                    timeout=120)
+                if where is None:
+                    raise GitHubAppError("the job has no pull request to answer on",
+                                         permanent=True)
+                await asyncio.wait_for(self.github.answer(*where, body, marker, since),
+                                       timeout=120)
                 gh["answered"] = True
                 break
             except Exception as e:  # noqa: BLE001 - the job result stays in the web UI
-                permanent = isinstance(e, (KeyError, TypeError, ValueError)) or \
-                    getattr(e, "permanent", False)
                 log.warning("job %s: could not post the result to GitHub: %s", job_id, e)
-                if permanent:
+                if getattr(e, "permanent", False):
                     gh["answered"] = "failed"
                     break
                 if wait is None:

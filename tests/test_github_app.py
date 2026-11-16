@@ -39,6 +39,8 @@ def rsa_pem() -> str:
     ("@manyeyes-bot, review quick", ("quick", "")),
     ("Use `@manyeyes-bot review` to start one.", None),
     ("Example:\n```\n@manyeyes-bot review deep\n```\nok", None),
+    ("Unclosed:\n```\n@manyeyes-bot review", None),
+    ("```x```\n@manyeyes-bot quick", ("quick", "")),
 ])
 def test_parse_command(body, want):
     cmd = parse_command(body, "manyeyes-bot")
@@ -72,6 +74,9 @@ def test_result_comment():
                              "error": "could not prepare the code: git: /data/work/x"}, None)
     assert failed == ("@alice The manyeyes review failed: manyeyes could not fetch the code "
                       "of this pull request.")
+    every = result_comment({"status": "failed",
+                            "error": "all 3 reviewers failed (2 rate limited): /x/y"}, None)
+    assert every.endswith("failed: all 3 reviewers failed (mostly: rate limited).")
     crash = result_comment({"status": "failed", "error": "OSError: /data/work/x"}, None)
     assert "/data" not in crash and "internal error" in crash
     assert "cancelled" in result_comment({"status": "cancelled"}, None)
@@ -345,6 +350,10 @@ def test_answer_errors(settings):
     args = (7, "acme/app", 5, "b", "m", "s")
     with pytest.raises(github_app.GitHubAppError) as e:
         asyncio.run(app.answer(*args))
+    assert e.value.permanent is False      # a 422 can be a temporary spam block
+    status["post"] = 404
+    with pytest.raises(github_app.GitHubAppError) as e:
+        asyncio.run(app.answer(*args))
     assert e.value.permanent
     status["post"] = 502          # not retried (GitHub may have taken it), not permanent
     with pytest.raises(github_app.GitHubAppError) as e:
@@ -355,3 +364,27 @@ def test_answer_errors(settings):
                                               "github_app.webhook_secret": SECRET}))
     with pytest.raises(github_app.GitHubAppError, match="cannot sign"):
         bad._jwt()
+
+
+def test_answer_lookup_fails_closed_and_follows_pages(settings):
+    import httpx
+    pages: dict[int, list] = {1: [{"body": "x"}] * 100, 2: [{"body": "a <!--m-->"}]}
+    posts, lookup = [], {"status": 200}
+
+    def handler(req):
+        if req.url.path.endswith("/access_tokens"):
+            return httpx.Response(201, json={"token": "t"})
+        if req.method == "GET":
+            if lookup["status"] != 200:
+                return httpx.Response(lookup["status"])
+            return httpx.Response(200, json=pages.get(int(req.url.params["page"]), []))
+        posts.append(req)
+        return httpx.Response(201, json={})
+
+    app = real_app(settings, handler)
+    args = (7, "acme/app", 5, "b", "<!--m-->", "s")
+    assert asyncio.run(app.answer(*args)) is False     # found on page 2
+    lookup["status"] = 503
+    with pytest.raises(github_app.GitHubAppError) as e:
+        asyncio.run(app.answer(*args))
+    assert not e.value.permanent and posts == []      # in doubt: no post
