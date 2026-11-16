@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-11-16
+
 ### Added
 - More than one reviewer login per provider (`manyeyes login codex --name second`, stored in `auth/codex@second`). Each reviewer gets the login with the most quota left. On a rate limit or a failed login, the reviewer runs once more on another login, within the same time limit. A used-up plan puts the login to rest until its full plan window resets (`limits.login_rest_s` when unknown). The Stats page shows usage per login; the people who may change settings can switch a login off and on and end a rest (`POST /api/logins/{kind}/{name}`, audit-logged). Reviewer runs record their login.
 - Pull request context. A review of a pull request now gives the reviewers its title, description and comments, as quoted JSON data, not instructions. Only comments from the PR's author and the repository's owners, members and collaborators count; bots are left out. The newest comments win when there are many. Setting: `review.pr_context`, on by default: after the upgrade this text goes to the reviewer providers, like the code. A branch review is unchanged.
