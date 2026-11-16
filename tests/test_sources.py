@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 import subprocess
 import time
@@ -449,6 +450,12 @@ def test_empty_root_guide_falls_back_to_github_folder(repo):
     assert local_guide(repo, "main") == (".github/MANYEYES.md", "real rules")
 
 
+def _git_version() -> tuple[int, ...]:
+    out = subprocess.run(["git", "--version"], capture_output=True, text=True).stdout
+    return tuple(int(x) for x in re.findall(r"\d+", out)[:2])
+
+
+@pytest.mark.skipif(_git_version() < (2, 44), reason="GIT_NO_LAZY_FETCH needs git 2.44")
 def test_local_guide_never_fetches(repo, tmp_path):
     # A partial clone without the blob: no lazy fetch with the repo's own config.
     from manyeyes.sources import local_guide
