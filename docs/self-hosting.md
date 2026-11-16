@@ -6,6 +6,7 @@ The server gives a team one place to run reviews: an MCP endpoint for coding age
 
 - One deployment serves one team that trusts each other.
 - Everyone on the allowlist can review every repository that the server's GitHub token can read, and can see every job and every review. People can cancel and delete only their own jobs.
+- With the optional GitHub App, people on the allowlist can also start a review from a pull request comment, on the repositories where the App is installed. The App posts the synthesis on that pull request, where everyone who can read the pull request sees it.
 - Reviewers send the code under review to their provider (OpenAI for Codex, Anthropic for Claude), under the terms of the logged-in accounts. The synthesis sends all reviews to the OpenAI API. Do not review code that may not go to these providers. You, the operator, decide the lawful basis and the provider agreements for that data.
 - A prompt-injected reviewer can send the code it sees, and its own provider login, to any host: reviewers need the network. It cannot read the database, the other secrets or other jobs: each reviewer runs in a bubblewrap jail, and the server refuses to start if a self-test can see through the jail.
 - The jail needs user namespaces, so the container runs with `seccomp`, `apparmor` and `systempaths` unconfined. The container runs as a normal user. If you need a stronger outer boundary, run it under gVisor or in a VM.
@@ -77,6 +78,59 @@ Use `location ^~ /prefix/` in nginx, so a general regex rule for `*.js` or `*.cs
 - **Claude Code**: `claude mcp add --transport http manyeyes https://example.org/manyeyes/mcp`. The first call opens a GitHub sign-in.
 - **Clients of the previous agent-swarm server**: keep them as they are. The tool names (`swarm_review`, `swarm_spar`, …) and arguments are unchanged, and the server tells clients it is "manyeyes (formerly agent-swarm)". Renaming a client's label (`claude mcp remove agent-swarm && claude mcp add … manyeyes …`) is optional; it changes the tool prefix from `mcp__agent-swarm__` to `mcp__manyeyes__`, so update permission lists that name the old prefix.
 - **Scripts, CI, header-only clients**: create a token on the Tokens page, then send `Authorization: Bearer <token>`.
+
+## Optional: reviews from a pull request comment
+
+With a GitHub App, a person can start a review from a pull request. They tag the App in a comment, and the App answers on the pull request with the synthesis.
+
+```
+@your-app-name review
+@your-app-name review quick
+@your-app-name review deep: check the migrations
+```
+
+The tag is `@` plus the name of your App. After the tag comes an optional word `review`, an optional mode (`quick`, `full` or `deep`; the default is `full`), and then free text that the reviewers get as the focus. Quoted lines (`> ...`) do not count.
+
+**Who can start a review.** Both conditions must be true:
+
+- The person is on the allowlist.
+- GitHub shows the person as an owner, member or collaborator of the repository.
+
+Other comments do nothing. Strangers on a public repository cannot start reviews. A collaborator who is not on the allowlist gets a short answer. The per-person limits apply to the person who wrote the comment.
+
+**Requirement.** GitHub must reach the server over HTTPS. A server that only runs on an internal network cannot get the webhooks.
+
+### Create the App
+
+Your organization → Settings → Developer settings → GitHub Apps → New GitHub App.
+
+| Field | Value |
+|---|---|
+| GitHub App name | The tag people type, for example `acme-manyeyes`. Choose a name that is not a GitHub user: a tag of a user's name also notifies that user. |
+| Homepage URL | `https://example.org/manyeyes/` |
+| Webhook URL | `https://example.org/manyeyes/github/webhook` |
+| Webhook secret | A long random string (`openssl rand -hex 32`) |
+| Repository permissions | Contents: read. Pull requests: read and write. Metadata: read (always on). |
+| Subscribe to events | Issue comment |
+| Where can this GitHub App be installed? | Only on this account |
+
+Then:
+
+1. Generate a private key on the App page. GitHub downloads a `.pem` file.
+2. Install the App on the repositories that you want reviewed.
+3. Give the server the App ID (on the App page), the key and the webhook secret, in `secrets.env` or in your secret store:
+
+```
+MANYEYES_GITHUB_APP_ID=123456
+MANYEYES_GITHUB_APP_PRIVATE_KEY_FILE=/data/github-app.pem    # mode 600
+MANYEYES_GITHUB_WEBHOOK_SECRET=...
+```
+
+4. Restart the server. On the App's "Advanced" tab, the first delivery (a `ping`) shows a green tick when the server answered.
+
+For each job, the server gets a token for that one repository from the App. It uses the token to clone the code and to post the comment. As with `MANYEYES_GITHUB_TOKEN`, no reviewer gets the token. A review started from a comment uses the App's token, not `MANYEYES_GITHUB_TOKEN`.
+
+Set `MANYEYES_SERVER_PUBLIC_URLS`. The answer then links to the full result in the web UI.
 
 ## Resource limits
 

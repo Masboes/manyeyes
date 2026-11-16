@@ -27,7 +27,7 @@ server = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "pydantic>=2.6",
-    "PyJWT>=2.8",
+    "PyJWT[crypto]>=2.8",
     "fastmcp>=3.4,<4",
 ]
 

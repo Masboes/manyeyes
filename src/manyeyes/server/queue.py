@@ -25,6 +25,7 @@ from ..sources import (
     evict_context_cache,
     prepare_context,
 )
+from .github_app import GitHubApp, GitHubAppError, job_url, result_comment
 
 if TYPE_CHECKING:
     from ..store.db import Store
@@ -53,6 +54,8 @@ class Worker:
         self._retention: asyncio.Task | None = None
         self._updates: asyncio.Task | None = None
         self._usage: asyncio.Task | None = None
+        self.github = GitHubApp(settings)
+        self._answers: set[asyncio.Task] = set()
         from ..updates import UpdateInfo
         self.update_info = UpdateInfo()
 
@@ -80,6 +83,8 @@ class Worker:
 
     def start(self) -> None:
         # Close out jobs a crash left "running" first, so the sweep can clean their folders.
+        from_github = [j["id"] for j in self.store.list_jobs(500, status="running")
+                       if j.get("source") == "github"]
         n = self.store.reconcile_orphans()
         self._sweep_leftovers()
         if n:
@@ -90,6 +95,10 @@ class Worker:
         self._retention = asyncio.create_task(self._retention_loop(), name="manyeyes-retention")
         self._updates = asyncio.create_task(self._update_loop(), name="manyeyes-updates")
         self._usage = asyncio.create_task(self._usage_loop(), name="manyeyes-usage")
+        for job_id in from_github:   # tell the pull request that its review was lost
+            t = asyncio.create_task(self.answer_on_github(job_id))
+            self._answers.add(t)
+            t.add_done_callback(self._answers.discard)
 
     def notify(self) -> None:
         self._wake.set()
@@ -117,6 +126,8 @@ class Worker:
         else:
             self.store.update_job(job_id, status="cancelled", finished_at=time.time(),
                                   error="cancelled before start")
+            if job.get("source") == "github":
+                await self.answer_on_github(job_id)
         return True
 
     async def _run_loop(self) -> None:
@@ -159,6 +170,23 @@ class Worker:
                                       error=f"{type(e).__name__}: {e}")
         finally:
             self.notify()
+            if job.get("source") == "github":
+                await self.answer_on_github(job["id"])
+
+    async def answer_on_github(self, job_id: str) -> None:
+        """Post the end of a job started from a pull request comment to that pull request."""
+        job = self.store.get_job(job_id)
+        if job is None or job.get("source") != "github":
+            return
+        gh = json.loads(job.get("options_json") or "{}").get("github") or {}
+        if not gh or not self.github.configured:
+            return
+        body = result_comment(job, job_url(self.base, job_id))
+        try:
+            await asyncio.wait_for(self.github.comment(gh["installation"], job["repo"],
+                                                       job["pr"], body), timeout=120)
+        except Exception as e:  # noqa: BLE001 - the job result stays in the web UI
+            log.warning("job %s: could not post the result to GitHub: %s", job_id, e)
 
     async def _run(self, job: dict) -> None:
         s = effective_settings(self.base, self.store)
@@ -184,8 +212,12 @@ class Worker:
                 try:
                     budget = min(float(s["limits.clone_timeout_s"]),
                                  deadline - time.monotonic())
+                    token = s["github.token"]
+                    if opts.get("github"):
+                        token = await asyncio.wait_for(self.github.installation_token(
+                            opts["github"]["installation"], job["repo"]), timeout=budget)
                     task = await asyncio.wait_for(clone_review(
-                        job["repo"], work, token=s["github.token"],
+                        job["repo"], work, token=token,
                         timeout=budget, pr=job.get("pr"),
                         head=job.get("head_ref"), base=job.get("base_ref"),
                         instructions=job.get("prompt") or ""), timeout=budget)
@@ -193,7 +225,7 @@ class Worker:
                     self.store.update_job(job["id"], status="failed", finished_at=time.time(),
                                           error=f"could not prepare the code within {int(budget)}s")
                     return
-                except SourceError as e:
+                except (SourceError, GitHubAppError) as e:
                     self.store.update_job(job["id"], status="failed", finished_at=time.time(),
                                           error=f"could not prepare the code: {e}")
                     return

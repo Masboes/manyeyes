@@ -26,6 +26,7 @@ from .. import __version__
 from ..store.db import Store
 from .api import create_router
 from .auth import SESSION_COOKIE, SESSION_TTL_S, STATE_COOKIE, Auth
+from .github_app import create_webhook_router
 from .mcp import create_mcp
 from .queue import Worker
 
@@ -170,6 +171,7 @@ def create_app(settings: Settings) -> FastAPI:
         return resp
 
     app.include_router(create_router(settings, store, worker, auth))
+    app.include_router(create_webhook_router(settings, store, worker, auth))
 
     # -- web UI -------------------------------------------------------------------
     # Assets live under static/<content hash>/: every change gets new URLs, so

@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- Reviews from a pull request comment. With an optional GitHub App (`github_app.id`, `github_app.private_key`, `github_app.webhook_secret`), a comment that tags the App (`@<app-name> review quick: focus text`) queues a review of that pull request. The App reacts with 👀, and posts the synthesis, or the reason for a failure, on the pull request when the job ends. Only people on the allowlist who are also owner, member or collaborator of the repository can start a review, and the per-person limits apply to them. The App's tokens are limited to the one repository and never reach a reviewer. See the self-hosting guide.
+
 ## [1.2.0] — 2026-11-12
 
 ### Changed

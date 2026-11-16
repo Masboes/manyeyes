@@ -966,7 +966,7 @@ server = [
     { name = "fastapi" },
     { name = "fastmcp" },
     { name = "pydantic" },
-    { name = "pyjwt" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -984,7 +984,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "openai", specifier = ">=1.40" },
     { name = "pydantic", marker = "extra == 'server'", specifier = ">=2.6" },
-    { name = "pyjwt", marker = "extra == 'server'", specifier = ">=2.8" },
+    { name = "pyjwt", extras = ["crypto"], marker = "extra == 'server'", specifier = ">=2.8" },
     { name = "tzdata", specifier = ">=2024.1" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.29" },
 ]
