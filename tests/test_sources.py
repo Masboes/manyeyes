@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -438,3 +440,45 @@ async def test_clone_guide_is_the_base_tip_not_the_pr(repo, tmp_path, monkeypatc
     task = await sources.clone_review("x/y", tmp_path / "clone", token="", timeout=60,
                                       head="feature", base="main")
     assert task.guide == ("MANYEYES.md", "new rules")
+
+
+def test_empty_root_guide_falls_back_to_github_folder(repo):
+    from manyeyes.sources import local_guide
+    _commit_on(repo, "main", {"MANYEYES.md": "\n", ".github/MANYEYES.md": "real rules\n"}, "g")
+    assert local_guide(repo, "main") == (".github/MANYEYES.md", "real rules")
+
+
+def test_local_guide_never_fetches(repo, tmp_path):
+    # A partial clone without the blob: no lazy fetch with the repo's own config.
+    from manyeyes.sources import local_guide
+    _commit_on(repo, "main", {"MANYEYES.md": "rules\n"}, "standards")
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(remote)], check=True)
+    git(remote, "config", "uploadpack.allowFilter", "true")
+    clone = tmp_path / "partial"
+    subprocess.run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout",
+                    f"file://{remote}", str(clone)], check=True)
+    assert local_guide(clone, "origin/main") is None
+    git(clone, "cat-file", "-e", "origin/main:a.py")      # the tree is there, only blobs miss
+
+
+async def test_clone_guide_bounds_size_and_time(repo, tmp_path):
+    from manyeyes import sources
+    big = "y" * (sources.GUIDE_MAX_BYTES * 2)
+    _commit_on(repo, "main", {"MANYEYES.md": big}, "huge")
+    env = sources.git_auth_env("")
+    path, text = await sources.clone_guide(repo, "main", env, 30)
+    assert len(text) < sources.GUIDE_MAX + 100 and "[cut:" in text
+
+    # A git whose cat-file hangs: the read gives up in time and kills it.
+    real_git = shutil.which("git")
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "git").write_text(f'#!/bin/sh\ncase "$*" in *cat-file*) sleep 30;; esac\n'
+                              f'exec {real_git} "$@"\n')
+    (fake / "git").chmod(0o755)
+    slow = {**env, "PATH": f"{fake}:{env['PATH']}"}
+    t = time.monotonic()
+    assert await sources.clone_guide(repo, "main", slow, 1.5) is None
+    assert time.monotonic() - t < 8
+    assert await sources.clone_guide(repo, "main", env, 0) is None

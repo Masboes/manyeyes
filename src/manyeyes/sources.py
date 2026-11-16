@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,70 +69,113 @@ SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 # A repository can hold review standards for manyeyes, like a CLAUDE.md for
 # reviews. They come from the base branch, never from the change itself.
 GUIDE_PATHS = ("MANYEYES.md", ".github/MANYEYES.md")
-GUIDE_MAX = 20_000   # characters
+GUIDE_MAX = 20_000                 # characters
+GUIDE_MAX_BYTES = GUIDE_MAX * 4    # UTF-8: enough bytes for GUIDE_MAX characters
+GUIDE_TIMEOUT_S = 30.0             # the standards are optional: never stall a review
 
 
-def _guide_blob(ls_tree: str) -> tuple[str, str] | None:
-    """(path, blob sha) of the first guide in `git ls-tree` output; files only."""
+def _guide_blobs(ls_tree: str) -> list[tuple[str, str]]:
+    """(path, blob sha) of each guide in `git ls-tree` output, in GUIDE_PATHS
+    order. Regular files only: never a symlink or a submodule."""
     found: dict[str, str] = {}
     for line in ls_tree.splitlines():
         meta, _, path = line.partition("\t")
         parts = meta.split()
         if len(parts) == 3 and parts[0] in ("100644", "100755") and parts[1] == "blob":
             found[path] = parts[2]
-    return next(((p, found[p]) for p in GUIDE_PATHS if p in found), None)
+    return [(p, found[p]) for p in GUIDE_PATHS if p in found]
 
 
 def _guide_text(path: str, raw: bytes) -> tuple[str, str] | None:
-    text = raw.decode("utf-8", errors="replace").strip()
+    text = raw[:GUIDE_MAX_BYTES].decode("utf-8", errors="replace").strip()
     if not text:
         return None
-    if len(text) > GUIDE_MAX:
+    if len(raw) > GUIDE_MAX_BYTES or len(text) > GUIDE_MAX:
         text = text[:GUIDE_MAX] + f"\n[cut: {path} is longer than {GUIDE_MAX} characters]"
     return path, text
 
 
 def local_guide(root: Path, base: str) -> tuple[str, str] | None:
-    """The review standards at `base` in a local repository, or None."""
+    """The review standards at `base` in a local repository, or None.
+
+    Local objects only (GIT_NO_LAZY_FETCH): a partial clone that lacks the
+    file gives no standards rather than a fetch with the repository's config.
+    """
+    env = {**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"}
+    git = ["git", *SAFE_GIT, "-C", str(root)]
     try:
-        blob = _guide_blob(_git(root, "ls-tree", "--end-of-options", base, "--", *GUIDE_PATHS))
-        if not blob:
-            return None
-        raw = subprocess.run(["git", *SAFE_GIT, "-C", str(root), "cat-file", "blob", blob[1]],
-                             check=True, capture_output=True).stdout
-    except (SourceError, subprocess.CalledProcessError) as e:
+        ls = subprocess.run([*git, "ls-tree", "--end-of-options", base, "--", *GUIDE_PATHS],
+                            env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                            check=True, timeout=GUIDE_TIMEOUT_S).stdout
+        for path, sha in _guide_blobs(ls.decode(errors="replace")):
+            proc = subprocess.Popen([*git, "cat-file", "blob", sha], env=env,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL)
+            try:
+                raw = proc.stdout.read(GUIDE_MAX_BYTES + 1)
+            finally:
+                proc.kill()
+                proc.wait(timeout=5)
+                proc.stdout.close()
+            guide = _guide_text(path, raw) if raw else None
+            if guide:
+                return guide
+    except (OSError, subprocess.SubprocessError) as e:
         log.warning("cannot read the review standards at %s: %s", base, e)
-        return None
-    return _guide_text(blob[0], raw)
+    return None
+
+
+async def _read_blob(dest: Path, sha: str, env: dict[str, str], timeout: float) -> bytes:
+    """Up to GUIDE_MAX_BYTES + 1 bytes of a blob; git fetches it if it is missing."""
+    proc = await asyncio.create_subprocess_exec(
+        "git", "-C", str(dest), "cat-file", "blob", sha, env=env,
+        stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
+
+    async def collect() -> bytes:
+        buf = bytearray()
+        while len(buf) <= GUIDE_MAX_BYTES:
+            chunk = await proc.stdout.read(65536)
+            if not chunk:
+                break
+            buf += chunk
+        return bytes(buf[:GUIDE_MAX_BYTES + 1])
+    try:
+        raw = await asyncio.wait_for(collect(), timeout=timeout)
+        if len(raw) <= GUIDE_MAX_BYTES:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+            if proc.returncode != 0:
+                raise SourceError(f"git cat-file exited {proc.returncode}")
+        return raw
+    finally:
+        if proc.returncode is None:
+            await _kill_group(proc)
 
 
 async def clone_guide(dest: Path, base_ref: str, env: dict[str, str],
                       timeout: float) -> tuple[str, str] | None:
     """The review standards at `base_ref` in a partial clone, or None.
 
-    The blob can be missing locally (a partial clone); git then fetches it.
-    Best effort: a review without the standards is better than no review.
+    Best effort within `timeout`: a review without the standards is better
+    than no review.
     """
+    end = time.monotonic() + timeout
     try:
-        blob = _guide_blob(await _run(["git", "-C", str(dest), "ls-tree", base_ref, "--",
-                                       *GUIDE_PATHS], env, timeout))
-        if not blob:
-            return None
-        proc = await asyncio.create_subprocess_exec(
-            "git", "-C", str(dest), "cat-file", "blob", blob[1], env=env,
-            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
-        try:
-            raw, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except BaseException:
-            await _kill_group(proc)
-            raise
-        if proc.returncode != 0:
-            raise SourceError(f"git cat-file exited {proc.returncode}")
+        if timeout < 1:
+            raise TimeoutError
+        ls = await _run(["git", "-C", str(dest), "ls-tree", base_ref, "--", *GUIDE_PATHS],
+                        env, timeout)
+        for path, sha in _guide_blobs(ls):
+            left = end - time.monotonic()
+            if left <= 0:
+                raise TimeoutError
+            guide = _guide_text(path, await _read_blob(dest, sha, env, left))
+            if guide:
+                return guide
     except (SourceError, TimeoutError) as e:
-        log.warning("cannot read the review standards at %s: %s", base_ref, e)
-        return None
-    return _guide_text(blob[0], raw)
+        log.warning("cannot read the review standards at %s: %s", base_ref,
+                    str(e) or "timed out")
+    return None
 
 
 # --- local checkout -------------------------------------------------------
@@ -627,6 +671,7 @@ async def clone_review(repo: str, dest: Path, *, token: str, timeout: float,
 
 async def _clone(repo: str, dest: Path, env: dict[str, str], timeout: float, pr: int | None,
                  head: str, base: str | None, instructions: str) -> ReviewTask:
+    start = time.monotonic()
     url = f"https://github.com/{repo}.git"
     await _run(["git", "init", "-q", str(dest)], env, timeout)
     await _run(["git", "-C", str(dest), "remote", "add", "origin", url], env, timeout)
@@ -668,4 +713,5 @@ async def _clone(repo: str, dest: Path, env: dict[str, str], timeout: float, pr:
     return ReviewTask(label=label, base_ref=base_label, base_sha=base_sha,
                       head_ref=head if pr is None else f"PR #{pr} ({head})",
                       head_sha=head_sha, instructions=instructions,
-                      guide=await clone_guide(dest, base_ref, env, timeout))
+                      guide=await clone_guide(dest, base_ref, env, min(
+                          GUIDE_TIMEOUT_S, timeout - (time.monotonic() - start) - 2)))

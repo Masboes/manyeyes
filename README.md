@@ -132,7 +132,7 @@ Put a `MANYEYES.md` file in the root of your repository, or in `.github/`. It wo
 - Ignore style: the linter handles it.
 ```
 
-manyeyes reads the file from the base branch, never from the change under review. A pull request therefore cannot change the rules it is judged by. A change to `MANYEYES.md` applies after it merges. Text over 20,000 characters is cut.
+manyeyes reads the file from the base branch, never from the change under review. A pull request therefore cannot change the rules it is judged by, if its base branch is protected. A pull request on top of another branch gets the standards of that branch. A change to `MANYEYES.md` applies after it merges. Text over 20,000 characters is cut.
 
 ### From a coding agent, without MCP
 
