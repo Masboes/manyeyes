@@ -98,6 +98,14 @@ KEYS: tuple[Key, ...] = (
         "Reviewers that run at the same time, across all jobs. Extra reviewers wait for a slot."),
     Key("github.token", str, "", "Token for cloning private repositories and reading PRs.",
         env="MANYEYES_GITHUB_TOKEN", secret=True),
+    Key("github_app.id", str, "", "GitHub App ID. With the key and webhook secret set, a pull "
+        "request comment that tags the App starts a review (see the self-hosting guide).",
+        env="MANYEYES_GITHUB_APP_ID"),
+    Key("github_app.private_key", str, "", "GitHub App private key (PEM). Use "
+        "`MANYEYES_GITHUB_APP_PRIVATE_KEY_FILE` for a key file.",
+        env="MANYEYES_GITHUB_APP_PRIVATE_KEY", secret=True),
+    Key("github_app.webhook_secret", str, "", "GitHub App webhook secret.",
+        env="MANYEYES_GITHUB_WEBHOOK_SECRET", secret=True),
     Key("auth.github_client_id", str, "", "GitHub OAuth App client ID.",
         env="MANYEYES_GITHUB_CLIENT_ID"),
     Key("auth.github_client_secret", str, "", "GitHub OAuth App client secret.",

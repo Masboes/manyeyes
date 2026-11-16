@@ -59,6 +59,9 @@ straggler_grace_s = 90
 | `server.max_concurrent_jobs` | `MANYEYES_SERVER_MAX_CONCURRENT_JOBS` | `2` |  | Jobs that run at the same time. |
 | `server.max_concurrent_reviewers` | `MANYEYES_SERVER_MAX_CONCURRENT_REVIEWERS` | `15` |  | Reviewers that run at the same time, across all jobs. Extra reviewers wait for a slot. |
 | `github.token` | `MANYEYES_GITHUB_TOKEN` (or `_FILE`) | — |  | Token for cloning private repositories and reading PRs. |
+| `github_app.id` | `MANYEYES_GITHUB_APP_ID` | — |  | GitHub App ID. With the key and webhook secret set, a pull request comment that tags the App starts a review (see the self-hosting guide). |
+| `github_app.private_key` | `MANYEYES_GITHUB_APP_PRIVATE_KEY` (or `_FILE`) | — |  | GitHub App private key (PEM). Use `MANYEYES_GITHUB_APP_PRIVATE_KEY_FILE` for a key file. |
+| `github_app.webhook_secret` | `MANYEYES_GITHUB_WEBHOOK_SECRET` (or `_FILE`) | — |  | GitHub App webhook secret. |
 | `auth.github_client_id` | `MANYEYES_GITHUB_CLIENT_ID` | — |  | GitHub OAuth App client ID. |
 | `auth.github_client_secret` | `MANYEYES_GITHUB_CLIENT_SECRET` (or `_FILE`) | — |  | GitHub OAuth App client secret. |
 | `auth.allowlist_file` | `MANYEYES_AUTH_ALLOWLIST_FILE` | — |  | GitHub usernames allowed in. Default `<data_dir>/allowlist.txt`. |

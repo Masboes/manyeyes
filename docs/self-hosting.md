@@ -6,6 +6,7 @@ The server gives a team one place to run reviews: an MCP endpoint for coding age
 
 - One deployment serves one team that trusts each other.
 - Everyone on the allowlist can review every repository that the server's GitHub token can read, and can see every job and every review. People can cancel and delete only their own jobs.
+- With the optional GitHub App, people on the allowlist can also start a review from a pull request comment, on the repositories where the App is installed. The App posts the synthesis on that pull request, where everyone who can read the pull request sees it.
 - Reviewers send the code under review to their provider (OpenAI for Codex, Anthropic for Claude), under the terms of the logged-in accounts. The synthesis sends all reviews to the OpenAI API. Do not review code that may not go to these providers. You, the operator, decide the lawful basis and the provider agreements for that data.
 - A prompt-injected reviewer can send the code it sees, and its own provider login, to any host: reviewers need the network. It cannot read the database, the other secrets or other jobs: each reviewer runs in a bubblewrap jail, and the server refuses to start if a self-test can see through the jail.
 - The jail needs user namespaces, so the container runs with `seccomp`, `apparmor` and `systempaths` unconfined. The container runs as a normal user. If you need a stronger outer boundary, run it under gVisor or in a VM.
@@ -40,9 +41,13 @@ Put the ID and the secret in `secrets.env` (mode 600):
 ```
 MANYEYES_GITHUB_CLIENT_ID=Ov23...
 MANYEYES_GITHUB_CLIENT_SECRET=...
-MANYEYES_SYNTH_OPENAI_API_KEY=sk-...           # optional: the synthesis
-MANYEYES_GITHUB_TOKEN=github_pat_...           # optional: private repositories (read-only)
+# Optional: the synthesis.
+MANYEYES_SYNTH_OPENAI_API_KEY=sk-...
+# Optional: private repositories (read-only).
+MANYEYES_GITHUB_TOKEN=github_pat_...
 ```
+
+Put a comment on its own line. A `#` after a value becomes part of the value.
 
 For private repositories, a fine-grained personal access token with read-only `Contents` and `Pull requests` on the repositories you want reviewed is enough.
 
@@ -77,6 +82,62 @@ Use `location ^~ /prefix/` in nginx, so a general regex rule for `*.js` or `*.cs
 - **Claude Code**: `claude mcp add --transport http manyeyes https://example.org/manyeyes/mcp`. The first call opens a GitHub sign-in.
 - **Clients of the previous agent-swarm server**: keep them as they are. The tool names (`swarm_review`, `swarm_spar`, …) and arguments are unchanged, and the server tells clients it is "manyeyes (formerly agent-swarm)". Renaming a client's label (`claude mcp remove agent-swarm && claude mcp add … manyeyes …`) is optional; it changes the tool prefix from `mcp__agent-swarm__` to `mcp__manyeyes__`, so update permission lists that name the old prefix.
 - **Scripts, CI, header-only clients**: create a token on the Tokens page, then send `Authorization: Bearer <token>`.
+
+## Optional: reviews from a pull request comment
+
+With a GitHub App, a person can start a review from a pull request. They tag the App in a comment, and the App answers on the pull request with the synthesis.
+
+```
+@your-app-name review
+@your-app-name review quick
+@your-app-name review deep: check the migrations
+```
+
+The tag is `@` plus the name of your App. Start the comment with the tag: a tag later in the comment, in code or in a quote (`> ...`) does nothing, so examples and replies cannot start a review by accident. After the tag comes an optional word `review`, an optional mode (`quick`, `full` or `deep`; the default is `full`), and then free text that the reviewers get as the focus.
+
+**Who can start a review.** Both conditions must be true:
+
+- The person is on the allowlist.
+- GitHub marks the comment as written by the repository owner, a member of the organization that owns it, or a collaborator on it.
+
+Other comments do nothing. GitHub can mark a member who hides their organization membership as a contributor; such a person must make the membership public or be added as a collaborator. Strangers on a public repository cannot start reviews. A collaborator who is not on the allowlist gets a short answer. The per-person limits apply to the person who wrote the comment.
+
+**Requirement.** GitHub must reach the server over HTTPS. A server that only runs on an internal network cannot get the webhooks.
+
+### Create the App
+
+Your organization → Settings → Developer settings → GitHub Apps → New GitHub App.
+
+| Field | Value |
+|---|---|
+| GitHub App name | The tag people type, for example `acme-manyeyes`. Choose a name that is not a GitHub user: a tag of a user's name also notifies that user. |
+| Homepage URL | `https://example.org/manyeyes/` |
+| Webhook URL | `https://example.org/manyeyes/github/webhook` |
+| Webhook secret | A long random string (`openssl rand -hex 32`) |
+| Repository permissions | Contents: read. Issues: read and write. Pull requests: read and write. Metadata: read (always on). |
+| Subscribe to events | Issue comment |
+| Where can this GitHub App be installed? | Only on this account |
+
+Then:
+
+1. Generate a private key on the App page. GitHub downloads a `.pem` file.
+2. Install the App on the repositories that you want reviewed.
+3. Give the server the App ID (on the App page), the key and the webhook secret, in `secrets.env` or in your secret store:
+
+```
+# The key file must be readable by the server only (mode 600).
+MANYEYES_GITHUB_APP_ID=123456
+MANYEYES_GITHUB_APP_PRIVATE_KEY_FILE=/data/github-app.pem
+MANYEYES_GITHUB_WEBHOOK_SECRET=...
+```
+
+4. Restart the server. On the App's "Advanced" tab, find the first delivery (a `ping`) and click "Redeliver". GitHub sent it when you created the App, before the server knew the App. The redelivery shows a green tick when the server answers.
+
+For each job, the server gets tokens for that one repository from the App: a read-only token to clone the code, and a token to post the answer. As with `MANYEYES_GITHUB_TOKEN`, no reviewer gets a token. A review started from a comment uses the App's tokens, not `MANYEYES_GITHUB_TOKEN`.
+
+The answer holds the synthesis, or a short, fixed reason when the job failed. The details of a failure stay on the job page. When GitHub is down, the server tries again: twice at once, then at its next start, for jobs that ended in the last day. Set `MANYEYES_SERVER_PUBLIC_URLS`: the answer then links to the full result in the web UI.
+
+If you rename the App, restart the server: it reads the App name once.
 
 ## Resource limits
 

@@ -27,17 +27,18 @@ manyeyes CLI ──► engine ◄── server (FastAPI: web UI, /api, /mcp, Git
 | `jobs.py` | Runs one job and records everything in the store (shared by CLI and server). |
 | `store/` | SQLite store, numbered migrations, stats. |
 | `server/` | App, REST API, MCP tools, auth, queue worker, static web UI. |
+| `server/github_app.py` | The optional GitHub App: the webhook, the tag in a pull request comment, the answer on the pull request. |
 | `cli/` | Commands, and the launcher that runs them in the Docker image. |
 | `config.py` | The key registry and the five configuration layers. |
 
 ## A job, end to end
 
-1. A caller submits a review (MCP, API, web UI or CLI). The store records it as `queued`.
+1. A caller submits a review (MCP, API, web UI, CLI, or a pull request comment that tags the GitHub App). The store records it as `queued`.
 2. The worker claims it, resolves the settings (file, environment, web UI overrides) and clones the change.
 3. The runner starts every reviewer in its own jail. Each one reads the code, writes a review and exits.
 4. When enough reviews have succeeded (quorum), the remaining reviewers get a short grace period, then they are stopped. A reviewer whose family (codex, claude) has no successful review yet is not stopped: it runs until its family has one, or until its own timeout.
 5. The synthesis merges the reviews. The model sees them under anonymous labels (R1, R2, … in random order, no model names), to reduce vendor bias; it returns the merged findings as JSON. The code then places each finding by agreement (cross-family, single-family, singleton) and lists low-severity single-reviewer points under "Minor notes".
-6. The store records each reviewer's outcome, duration and tokens, the synthesis and the rendered result. The MCP call that was waiting returns the synthesis.
+6. The store records each reviewer's outcome, duration and tokens, the synthesis and the rendered result. The MCP call that was waiting returns the synthesis. For a job from a pull request comment, the App posts the synthesis (or the reason for a failure) on the pull request.
 
 ## Outcomes
 
