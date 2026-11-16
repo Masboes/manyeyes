@@ -86,12 +86,11 @@ def parse_command(body: str, slug: str) -> Command | None:
     """
     if not slug:
         return None
-    lines = [ln for ln in (body or "").splitlines()
-             if ln.strip() and not ln.lstrip().startswith(">")]
-    if not lines:
-        return None
+    lines = (body or "").splitlines()
+    while lines and (not lines[0].strip() or lines[0].lstrip().startswith(">")):
+        lines.pop(0)   # leading blank lines and quotes; the text after the tag stays whole
     text = "\n".join(lines)
-    m = re.match(rf" {{0,3}}@{re.escape(slug)}(?![\w-])", text, re.IGNORECASE)
+    m = re.match(rf" {{0,3}}@{re.escape(slug)}(?![\w/-])", text, re.IGNORECASE)
     if m is None:
         return None
     rest = text[m.end():].lstrip(" \t,:;.-")
@@ -180,7 +179,7 @@ def result_comment(job: dict[str, Any], job_url: str | None) -> str:
         body = _defuse_mentions(synthesis)
         room = MAX_COMMENT - len(head) - len(link) - 300
         cut = _cut(body, room)
-        if len(body) > room:
+        if len(cut) < len(body.rstrip()) or len(body) > room:
             cut += "\n\n… (cut: the result is too long for a comment)"
         body = cut
         return "\n\n".join(p for p in (head, body, "---\n" + link if link else "") if p)
@@ -330,7 +329,9 @@ class GitHubApp:
                 raise GitHubAppError(f"GitHub returned {r.status_code} for the comments")
             try:
                 rows = r.json()
-                if any(marker in (c.get("body") or "") for c in rows):
+                # Only a bot's comment counts: a person cannot block an answer.
+                if any(marker in (c.get("body") or "")
+                       and (c.get("user") or {}).get("type") == "Bot" for c in rows):
                     return True
             except (ValueError, AttributeError, TypeError) as e:
                 raise GitHubAppError("GitHub sent an unreadable comment list") from e

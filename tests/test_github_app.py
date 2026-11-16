@@ -33,6 +33,8 @@ def rsa_pem() -> str:
     ("\n  @manyeyes-bot deep\nmind the migrations", ("deep", "mind the migrations")),
     ("@manyeyes-bot check the cache", ("full", "check the cache")),
     ("@manyeyes-bot, review quick", ("quick", "")),
+    ("@manyeyes-bot quick check:\n\n> keep this\nand this", ("quick", "check:\n\n> keep this\nand this")),
+    ("@manyeyes-bot/team please look", None),
     ("> earlier text\n@manyeyes-bot quick", ("quick", "")),
     ("> @manyeyes-bot review\nthanks!", None),
     ("please @manyeyes-bot review", None),
@@ -326,13 +328,13 @@ def test_answer_posts_once_with_a_marker(settings):
             return httpx.Response(201, json={"token": "t"})
         if req.method == "GET":
             return httpx.Response(200, json=existing)
-        existing.append({"body": json.loads(req.content)["body"]})
+        existing.append({"body": json.loads(req.content)["body"], "user": {"type": "Bot"}})
         return httpx.Response(201, json={})
 
     app = real_app(settings, handler)
     args = (7, "acme/app", 5, "hello", "<!-- manyeyes job j1 -->", "2026-01-01T00:00:00Z")
     assert asyncio.run(app.answer(*args)) is True
-    assert existing == [{"body": "hello\n\n<!-- manyeyes job j1 -->"}]
+    assert [e["body"] for e in existing] == ["hello\n\n<!-- manyeyes job j1 -->"]
     assert calls[0][2] == {"repositories": ["app"]}         # a write token: no narrowing
     assert asyncio.run(app.answer(*args)) is False          # the marker is there: no repost
     assert len(existing) == 1
@@ -374,7 +376,10 @@ def test_answer_errors(settings):
 
 def test_answer_lookup_fails_closed_and_follows_pages(settings):
     import httpx
-    pages: dict[int, list] = {1: [{"body": "x"}] * 100, 2: [{"body": "a <!--m-->"}]}
+    bot = {"type": "Bot"}
+    pages: dict[int, list] = {1: [{"body": "x", "user": bot}] * 99 + [
+        {"body": "<!--m--> by a person", "user": {"type": "User"}}],
+        2: [{"body": "a <!--m-->", "user": bot}]}
     posts, lookup = [], {"status": 200}
 
     def handler(req):
