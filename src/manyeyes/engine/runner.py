@@ -41,6 +41,7 @@ from .task import Task
 
 if TYPE_CHECKING:
     from ..config import Settings
+    from ..logins import LoginPool
 
 log = logging.getLogger("manyeyes.runner")
 EventFn = Callable[[str, dict[str, Any]], Awaitable[None] | None]
@@ -148,8 +149,10 @@ def jailed_command(settings: Settings, rev: Reviewer, argv: list[str], workdir: 
 class Runner:
     def __init__(self, settings: Settings, *, run_dir: Path | None = None,
                  slots: asyncio.Semaphore | None = None,
-                 on_event: EventFn | None = None) -> None:
+                 on_event: EventFn | None = None,
+                 pool: LoginPool | None = None) -> None:
         self.s = settings
+        self.pool = pool
         self.run_dir = run_dir or settings.data_dir / "run" / uuid.uuid4().hex[:12]
         self.slots = slots
         self.on_event = on_event
@@ -193,6 +196,40 @@ class Runner:
                 self.slots.release()
 
     async def _run_one(self, rev: Reviewer, prompt: str, workdir: Path,
+                       extra_ro: list[Path]) -> ReviewerRun:
+        """One reviewer. With a login pool: on a rate limit, the login rests and
+        the reviewer runs once more on another login, when one is awake."""
+        if self.pool is None:
+            run = await self._attempt(rev, prompt, workdir, extra_ro)
+            run.login = rev.login
+            return run
+        tried: tuple[str, ...] = ()
+        while True:
+            login = self.pool.pick(rev.kind, exclude=tried)
+            if login is None:
+                now = time.time()
+                return ReviewerRun(rev.spec, Outcome.AUTH_FAILED, started_at=now,
+                                   finished_at=now, failure_reason=self.pool.why_none(rev.kind))
+            rev.login = login.name
+            self.pool.acquire(login)
+            try:
+                run = await self._attempt(rev, prompt, workdir, extra_ro)
+            finally:
+                self.pool.release(login)
+            run.login = login.name
+            if run.outcome != Outcome.RATE_LIMITED:
+                return run
+            until = self.pool.rest(login)
+            tried += (login.name,)
+            handle = self._procs[rev.spec.name]
+            if (self._cancelled or handle.kill_reason is not None
+                    or not self.pool.has_other(rev.kind, tried)):
+                return run
+            await _emit(self.on_event, "reviewer_retry",
+                        {"reviewer": rev.spec.name, "login": login.name,
+                         "resting_until": until})
+
+    async def _attempt(self, rev: Reviewer, prompt: str, workdir: Path,
                        extra_ro: list[Path]) -> ReviewerRun:
         spec = rev.spec
         handle = self._procs[spec.name]

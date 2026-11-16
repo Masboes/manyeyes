@@ -20,6 +20,7 @@ from .engine.task import Task
 
 if TYPE_CHECKING:
     from .config import Settings
+    from .logins import LoginPool
     from .store.db import Store
 
 ProgressFn = Callable[[str, dict[str, Any]], None]
@@ -41,7 +42,8 @@ def _event_payload(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
     if kind == "reviewer_finished":
         r: ReviewerRun = payload["run"]
         return {"reviewer": r.spec.name, "outcome": str(r.outcome),
-                "duration_s": r.duration_s, "reason": r.failure_reason or None}
+                "duration_s": r.duration_s, "reason": r.failure_reason or None,
+                "login": r.login or None}
     if kind == "synth_finished":
         s: SynthRun = payload["synth"]
         return {"outcome": s.outcome, "duration_s": s.duration_s,
@@ -54,7 +56,8 @@ async def run_job(store: Store, settings: Settings, job: dict[str, Any], task: T
                   slots: asyncio.Semaphore | None = None,
                   progress: ProgressFn | None = None,
                   on_runner: Callable[[Runner], None] | None = None,
-                  deadline: float | None = None) -> SwarmResult:
+                  deadline: float | None = None,
+                  pool: LoginPool | None = None) -> SwarmResult:
     """`deadline` (time.monotonic) bounds the job; default: limits.job_timeout_s from now."""
     job_id = job["id"]
 
@@ -69,8 +72,10 @@ async def run_job(store: Store, settings: Settings, job: dict[str, Any], task: T
             progress(kind, light)
 
     specs = build_specs(job["roster"], settings)
+    if pool is not None:
+        pool.settings = settings   # this job's settings (limits.login_rest_s can change)
     runner = Runner(settings, run_dir=settings.data_dir / "run" / job_id,
-                    slots=slots, on_event=on_event)
+                    slots=slots, on_event=on_event, pool=pool)
     if on_runner:
         on_runner(runner)
     if job.get("status") != "running":

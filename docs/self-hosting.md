@@ -176,6 +176,24 @@ For a server shared by a team that should not be able to use up each other's quo
 
 A starting point for 20 people on one ChatGPT Pro and one Claude seat: `user_jobs_per_hour=6`, `user_reviewer_runs_per_day=200`, `user_deep_jobs_per_day=3`, `user_concurrent_jobs=1`, with `server.max_concurrent_jobs=3`.
 
+## More than one login per provider
+
+One Codex login is a single point of failure: when it hits its plan limit, every Codex reviewer fails. Add more logins under a name:
+
+```bash
+docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/data" ghcr.io/masboes/manyeyes \
+    manyeyes login codex --name second
+```
+
+The first login lives in `auth/codex` and is called `default`; another one lives in `auth/codex@second`. Claude works the same way (`manyeyes login claude --name second`).
+
+- **Choice.** Each reviewer gets the login with the most quota left, from the newest usage reading. A login with reviewers on it counts as fuller, so a review spreads over the logins.
+- **Failover.** When a reviewer hits a rate limit, its login rests until its fullest plan window resets (from the usage reading; else `limits.login_rest_s`, 30 minutes). The reviewer then runs once more on another login.
+- **Dashboard.** The Stats page shows each login: its plan, how much of each window is used, whether it rests, and how many reviewers run on it. Admins can switch a login off and on, and end a rest early. Each change is in the audit log.
+- **Isolation.** A reviewer gets read-write access to its own login folder only.
+
+**Warning:** use one login per paid seat. Several personal subscriptions used to pool quota for a team can break the provider's terms. Business plans (for example ChatGPT Business or Claude Team) give each seat its own login.
+
 ## Updating
 
 The server checks GitHub for a new release twice a day and shows "Update available" in the web UI, with the release notes and the commands.

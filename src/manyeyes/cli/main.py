@@ -88,6 +88,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     lg = sub.add_parser("login", help="log a reviewer in")
     lg.add_argument("kind", choices=("codex", "claude"))
+    lg.add_argument("--name", default="default",
+                    help="add another login under this name (a-z, 0-9, '-'); reviewers "
+                         "then share the logins and move on when one hits its limit")
 
     d = sub.add_parser("doctor", help="check logins, tools and the jail")
     d.add_argument("--probe", action="store_true", help="also send a one-line prompt to "
@@ -233,8 +236,9 @@ async def _swarm(args: argparse.Namespace, s: Settings) -> int:
         # Created as running: a server sharing this data dir must never claim it.
         job = store.create_job(status="running", started_at=time.time(), **fields)
         err(f"job {job['id']}: {task.label} — {len(specs)} reviewers ({roster})")
+        from ..logins import LoginPool
         result = await run_job(store, s, job, task, work, progress=_progress(len(specs)),
-                               deadline=deadline, extra_ro=extra_ro)
+                               deadline=deadline, extra_ro=extra_ro, pool=LoginPool(s, store))
     finally:
         shutil.rmtree(work, ignore_errors=True)
         shutil.rmtree(Path(str(work) + "-context"), ignore_errors=True)
@@ -279,7 +283,12 @@ def _write_private(directory: Path, name: str, text: str) -> Path:
 # --- login / doctor --------------------------------------------------------
 
 def cmd_login(args: argparse.Namespace, s: Settings) -> int:
-    home = s.auth_dir / args.kind
+    from ..logins import LoginError, login_home
+    try:
+        home = login_home(s.auth_dir, args.kind, args.name)
+    except LoginError as e:
+        err(str(e))
+        return 2
     home.mkdir(parents=True, exist_ok=True)
     os.chmod(home, 0o700)
     env = {k: v for k, v in os.environ.items() if k not in ("OPENAI_API_KEY",
@@ -313,15 +322,16 @@ async def _usage(args: argparse.Namespace, s: Settings) -> int:
         err("no reviewer is logged in (manyeyes login codex)")
         return 1
     for w in windows:
+        who = w.provider if w.login == "default" else f"{w.provider}@{w.login}"
         if w.error:
-            print(f"{w.provider:7s} FAIL  {w.error}")
+            print(f"{who:16s} FAIL  {w.error}")
             continue
         left = ""
         if w.resets_at:
             mins = max(0, int(w.resets_at - _time.time()) // 60)
             left = f"resets in {mins // 60} h {mins % 60:02d} min" if mins >= 60 else \
                 f"resets in {mins} min"
-        print(f"{w.provider:7s} {w.window:16s} {w.used_percent:5.0f}% used  {left}")
+        print(f"{who:16s} {w.window:16s} {w.used_percent:5.0f}% used  {left}")
     return 1 if all(w.error for w in windows) else 0
 
 
@@ -352,8 +362,14 @@ async def _doctor(args: argparse.Namespace, s: Settings) -> int:
             except Exception:  # noqa: BLE001
                 version = "?"
         line(bool(b) if needed else (True if b else None), f"{kind} CLI", version or "missing")
-        line(rev.is_logged_in() if needed else (True if rev.is_logged_in() else None),
-             f"{kind} login", str(rev.auth_home))
+        from ..logins import list_logins
+        logins = list_logins(s.auth_dir, kind)
+        if not any(x.name == "default" for x in logins):
+            line(rev.is_logged_in() if needed else (True if rev.is_logged_in() else None),
+                 f"{kind} login", str(rev.auth_home))
+        for x in logins:
+            label = f"{kind} login" + ("" if x.name == "default" else f" '{x.name}'")
+            line(x.logged_in if needed else (True if x.logged_in else None), label, str(x.home))
     line(bool(s["synth.api_key"]) or None, "synthesis key",
          "set" if s["synth.api_key"] else "not set; synthesis will be skipped")
     if s["jail.enabled"]:

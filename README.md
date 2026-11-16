@@ -39,7 +39,7 @@ manyeyes login codex            # ChatGPT device login: open the URL, sign in, e
 manyeyes login claude           # optional: type /login, pick your Claude account, then /exit
 ```
 
-The logins live in `~/.manyeyes/auth/`. Every run mounts that folder, so you log in once on your machine. Codex uses your ChatGPT login only, never an API key.
+The logins live in `~/.manyeyes/auth/`. Every run mounts that folder, so you log in once on your machine. Codex uses your ChatGPT login only, never an API key. A server can hold more than one login per provider (`manyeyes login codex --name second`); reviewers then move to another login when one hits its limit. See [More than one login](docs/self-hosting.md#more-than-one-login-per-provider).
 
 The default rosters include Claude. Without a Claude login, use Codex only: `export MANYEYES_ROSTER=codex:10 MANYEYES_ROSTER_QUICK=codex:5 MANYEYES_ROSTER_DEEP=codex:10` (a server sets the rosters in Settings).
 

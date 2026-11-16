@@ -39,6 +39,7 @@ class Window:
     resets_at: float | None   # epoch seconds, when known
     plan: str | None = None
     error: str | None = None  # set when the probe failed; the other fields are empty
+    login: str = "default"    # which reviewer login (see logins.py)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -120,7 +121,8 @@ class ProbeError(Exception):
 
 
 async def _run(settings: Settings, kind: str, args: list[str], stdin: bytes,
-               until: Callable[[bytes], Any] | None) -> tuple[bytes, Any] | None:
+               until: Callable[[bytes], Any] | None,
+               login: str = "default") -> tuple[bytes, Any] | None:
     """Run the `kind` CLI with `args`, jailed and with the reviewer's environment.
 
     With `until`, stdout is read line by line until `until(line)` returns a value;
@@ -136,6 +138,7 @@ async def _run(settings: Settings, kind: str, args: list[str], stdin: bytes,
     try:
         rev = ADAPTERS[kind](ReviewerSpec(kind=kind, instance=1, model="default",
                                           effort="low"), settings, run_dir)
+        rev.login = login
         binary = rev.binary()
         if not binary or not rev.is_logged_in():
             return None
@@ -199,13 +202,14 @@ def _codex_answer(line: bytes) -> dict[str, Any] | None:
     return msg.get("result") or {}
 
 
-async def _codex(settings: Settings) -> list[Window]:
+async def _codex(settings: Settings, login: str = "default") -> list[Window]:
     msgs = [{"jsonrpc": "2.0", "id": 1, "method": "initialize",
              "params": {"clientInfo": {"name": "manyeyes", "version": "1"}}},
             {"jsonrpc": "2.0", "method": "initialized"},
             {"jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read"}]
     got = await _run(settings, "codex", ["app-server"],
-                     "".join(json.dumps(m) + "\n" for m in msgs).encode(), _codex_answer)
+                     "".join(json.dumps(m) + "\n" for m in msgs).encode(), _codex_answer,
+                     login)
     if got is None:
         return []                       # not installed or not logged in
     windows = parse_codex(got[1])
@@ -214,11 +218,11 @@ async def _codex(settings: Settings) -> list[Window]:
     return windows
 
 
-async def _claude(settings: Settings) -> list[Window]:
+async def _claude(settings: Settings, login: str = "default") -> list[Window]:
     # /usage is a local command: no model call. Only our own settings, no MCP servers.
     got = await _run(settings, "claude",
                      ["-p", "/usage", "--output-format", "json", "--no-session-persistence",
-                      "--strict-mcp-config", "--setting-sources", "user"], b"", None)
+                      "--strict-mcp-config", "--setting-sources", "user"], b"", None, login)
     if got is None:
         return []                       # not installed or not logged in
     out = got[0]
@@ -237,14 +241,22 @@ async def _claude(settings: Settings) -> list[Window]:
 
 
 async def probe(settings: Settings) -> list[Window]:
-    """Probe every logged-in provider. A failed probe gives one Window with `error`."""
+    """Probe every logged-in reviewer login. A failed probe gives one Window with `error`."""
+    from .logins import list_logins
+
+    fns = {"codex": _codex, "claude": _claude}
     out: list[Window] = []
-    for name, fn in (("codex", _codex), ("claude", _claude)):
+    logins = [(x.kind, x.name) for x in list_logins(settings.auth_dir)] or \
+        [("codex", "default"), ("claude", "default")]
+    for kind, login in logins:
         try:
-            out += await fn(settings)
+            got = await fns[kind](settings, login)
         except ProbeError as e:
-            out.append(Window(name, "", 0.0, None, error=str(e)[:200]))
+            got = [Window(kind, "", 0.0, None, error=str(e)[:200])]
         except Exception:  # noqa: BLE001 - details go to the log, not to the API
-            log.exception("%s usage probe failed", name)
-            out.append(Window(name, "", 0.0, None, error="probe failed; see the server log"))
+            log.exception("%s usage probe failed (login %s)", kind, login)
+            got = [Window(kind, "", 0.0, None, error="probe failed; see the server log")]
+        for w in got:
+            w.login = login
+        out += got
     return out

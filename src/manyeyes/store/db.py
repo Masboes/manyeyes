@@ -202,12 +202,13 @@ class Store:
             "INSERT INTO reviewer_runs (job_id, reviewer, kind, instance, model, effort, "
             "started_at, finished_at, duration_s, input_tokens, cached_input_tokens, "
             "output_tokens, reasoning_tokens, outcome, failure_reason, failure_detail, "
-            "exit_code, review_md, model_resolved) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "exit_code, review_md, model_resolved, login) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (job_id, run.spec.name, run.spec.kind, run.spec.instance, run.spec.model,
              run.spec.effort, run.started_at, run.finished_at, run.duration_s, u.input_tokens,
              u.cached_input_tokens, u.output_tokens, u.reasoning_tokens, str(run.outcome),
              run.failure_reason or None, run.failure_detail or None, run.exit_code,
-             run.review if run.ok else None, run.model_resolved or None))
+             run.review if run.ok else None, run.model_resolved or None, run.login or None))
 
     def record_synth(self, job_id: str | None, s: SynthRun) -> None:
         self._write(
@@ -292,14 +293,43 @@ class Store:
     def add_usage(self, windows: list[dict[str, Any]], ts: float | None = None) -> None:
         ts = time.time() if ts is None else ts
         with self._lock, self._conn() as c:
-            c.executemany("INSERT INTO usage_snapshots (ts, provider, window, used_percent, "
-                          "resets_at, plan, error) VALUES (?,?,?,?,?,?,?)",
-                          [(ts, w["provider"], w["window"], w.get("used_percent"),
-                            w.get("resets_at"), w.get("plan"), w.get("error")) for w in windows])
+            c.executemany("INSERT INTO usage_snapshots (ts, provider, login, window, "
+                          "used_percent, resets_at, plan, error) VALUES (?,?,?,?,?,?,?,?)",
+                          [(ts, w["provider"], w.get("login") or "default", w["window"],
+                            w.get("used_percent"), w.get("resets_at"), w.get("plan"),
+                            w.get("error")) for w in windows])
 
     def usage_since(self, since: float) -> list[dict[str, Any]]:
-        return self._all("SELECT ts, provider, window, used_percent, resets_at, plan, error "
-                         "FROM usage_snapshots WHERE ts>=? ORDER BY ts", (since,))
+        return self._all("SELECT ts, provider, login, window, used_percent, resets_at, plan, "
+                         "error FROM usage_snapshots WHERE ts>=? ORDER BY ts", (since,))
+
+    def latest_usage(self, kind: str, login: str, since: float) -> list[dict[str, Any]]:
+        """The windows of the newest successful reading of one login since `since`."""
+        return self._all(
+            "SELECT window, used_percent, resets_at, plan, ts FROM usage_snapshots "
+            "WHERE provider=? AND login=? AND error IS NULL AND ts=(SELECT MAX(ts) FROM "
+            "usage_snapshots WHERE provider=? AND login=? AND error IS NULL AND ts>=?)",
+            (kind, login, kind, login, since))
+
+    # -- reviewer logins ----------------------------------------------------
+
+    def login_states(self) -> dict[tuple[str, str], dict[str, Any]]:
+        return {(r["kind"], r["name"]): r for r in self._all("SELECT * FROM logins")}
+
+    def set_login(self, kind: str, name: str, *, by: str | None = None,
+                  **fields: Any) -> None:
+        """Upsert a login's state: `enabled` and/or `resting_until`."""
+        allowed = {"enabled", "resting_until"}
+        if not fields or set(fields) - allowed:
+            raise ValueError(f"set_login takes {sorted(allowed)}")
+        cols = ", ".join(fields)
+        marks = ", ".join("?" for _ in fields)
+        updates = ", ".join(f"{k}=excluded.{k}" for k in fields)
+        self._write(
+            f"INSERT INTO logins (kind, name, {cols}, updated_at, updated_by) "
+            f"VALUES (?, ?, {marks}, ?, ?) ON CONFLICT(kind, name) DO UPDATE SET "
+            f"{updates}, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+            (kind, name, *fields.values(), time.time(), by))
 
     def prune_usage(self, before: float) -> int:
         return self._write("DELETE FROM usage_snapshots WHERE ts<?", (before,))

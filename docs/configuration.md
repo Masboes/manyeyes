@@ -26,7 +26,7 @@ straggler_grace_s = 90
 | Key | Environment | Default | Web UI | Meaning |
 |---|---|---|---|---|
 | `data_dir` | `MANYEYES_DATA_DIR` | `~/.manyeyes` |  | Database, runs, secrets file and auth homes. Keep it outside /tmp: Codex refuses to run its sandbox from there. |
-| `auth_dir` | `MANYEYES_AUTH_DIR` | — |  | Reviewer login homes (`codex/`, `claude/`). Default `<data_dir>/auth`. |
+| `auth_dir` | `MANYEYES_AUTH_DIR` | — |  | Reviewer login homes (`codex/`, `claude/`, and `codex@<name>/`, `claude@<name>/` for more logins). Default `<data_dir>/auth`. |
 | `roster` | `MANYEYES_ROSTER` | `codex:8,claude:2` | yes | Reviewers for a full run (the default mode). |
 | `roster_quick` | `MANYEYES_ROSTER_QUICK` | `codex:4,claude:1` | yes | Reviewers for a quick run (`mode=quick`, `--quick`): fewer and faster, for iterating. |
 | `roster_deep` | `MANYEYES_ROSTER_DEEP` | `codex:8,claude:3` | yes | Reviewers for a deep run (`mode=deep`, `--deep`); deep runs always use the thorough prompt. |
@@ -40,6 +40,7 @@ straggler_grace_s = 90
 | `reviewers.claude.effort` | `MANYEYES_REVIEWERS_CLAUDE_EFFORT` | `high` | yes | Claude effort. One of: low, medium, high, xhigh, max. |
 | `reviewers.claude.bin` | `MANYEYES_REVIEWERS_CLAUDE_BIN` | `claude` |  | Claude Code CLI command. |
 | `limits.reviewer_timeout_s` | `MANYEYES_LIMITS_REVIEWER_TIMEOUT_S` | `600` | yes | Hard limit per reviewer, seconds. |
+| `limits.login_rest_s` | `MANYEYES_LIMITS_LOGIN_REST_S` | `1800` | yes | How long a reviewer login rests after a rate limit, in seconds, when no usage reading tells when its plan window resets. |
 | `limits.quorum_fraction` | `MANYEYES_LIMITS_QUORUM_FRACTION` | `0.8` | yes | Share of reviewers that must succeed before the straggler grace starts. |
 | `limits.straggler_grace_s` | `MANYEYES_LIMITS_STRAGGLER_GRACE_S` | `120` | yes | Seconds the remaining reviewers get after quorum. |
 | `limits.clone_timeout_s` | `MANYEYES_LIMITS_CLONE_TIMEOUT_S` | `300` |  | Limit for cloning a repository, seconds. |
