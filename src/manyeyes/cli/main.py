@@ -366,9 +366,12 @@ async def _doctor(args: argparse.Namespace, s: Settings) -> int:
         logins = list_logins(s.auth_dir, kind)
         if not logins:
             line(False if needed else None, f"{kind} login", f"none in {s.auth_dir}")
+        any_in = any(x.logged_in for x in logins)
         for x in logins:
             label = f"{kind} login" + ("" if x.name == "default" else f" '{x.name}'")
-            line(x.logged_in if needed else (True if x.logged_in else None), label, str(x.home))
+            # One missing login fails only when no login of this kind works.
+            ok = True if x.logged_in else (False if needed and not any_in else None)
+            line(ok, label, str(x.home) + ("" if x.logged_in else " (not logged in)"))
     line(bool(s["synth.api_key"]) or None, "synthesis key",
          "set" if s["synth.api_key"] else "not set; synthesis will be skipped")
     if s["jail.enabled"]:

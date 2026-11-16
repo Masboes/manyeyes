@@ -134,7 +134,9 @@ async def test_a_kill_between_attempts_stops_the_retry(settings, store, tmp_path
 
     def rest_then_kill(login, settings=None):
         until = real_rest(login, settings)
-        r._procs["codex#1"].kill_reason = Outcome.STRAGGLER_KILLED   # what kill() records
+        # A straggler kill that lands after the first process exited: kill() keeps
+        # the attempt's own result but records the request (see the test below).
+        r._procs["codex#1"].stop_requested = (Outcome.STRAGGLER_KILLED, "")
         return until
     monkeypatch.setattr(pool, "rest", rest_then_kill)
     res = await r.run(SparTask("q"), build_specs("codex:1@limited-spare", settings), tmp_path)
@@ -147,3 +149,53 @@ async def test_kill_after_a_finished_attempt_is_recorded(settings, store, tmp_pa
     h.proc = None              # what the retry loop leaves between attempts
     await h.kill(Outcome.STRAGGLER_KILLED)
     assert h.kill_reason == Outcome.STRAGGLER_KILLED and h.stopped.is_set()
+
+
+
+async def test_kill_of_an_exited_process_is_still_a_stop_request():
+    import asyncio
+
+    from manyeyes.engine.runner import _Proc
+    h = _Proc()
+    h.proc = await asyncio.create_subprocess_exec("true")
+    await h.proc.wait()
+    await h.kill(Outcome.STRAGGLER_KILLED)
+    assert h.kill_reason is None                        # the attempt keeps its result
+    assert h.stop_requested == (Outcome.STRAGGLER_KILLED, "")
+
+
+@pytest.mark.parametrize("text,plan", [
+    ("rate limit: You've hit your usage limit. Try again later.", True),
+    ("5-hour limit reached ∙ resets 3pm", True),
+    ("Claude AI usage limit reached|1794870000", True),
+    ("insufficient_quota: You exceeded your current quota", True),
+    ("rate limit: stream error: 429 Too Many Requests", False),
+    ("Rate limit reached for requests per min. Please try again in 2s.", False),
+    ("overloaded_error: Overloaded", False),
+])
+def test_plan_limit_words(text, plan):
+    from manyeyes.engine.runner import plan_limit
+    assert plan_limit(text) is plan
+
+
+def test_rest_is_atomic_max_and_forget_clears_the_admin(settings, store):
+    now = time.time()
+    store.set_login("codex", "default", enabled=0, by="Alice")
+    assert store.extend_rest("codex", "default", now + 7200, by="manyeyes") == now + 7200
+    assert store.extend_rest("codex", "default", now + 1800, by="manyeyes") == now + 7200
+    store.set_login("codex", "default", enabled=1, by="Alice")
+    store.forget_user("alice")
+    assert store.login_states()[("codex", "default")]["updated_by"] == "(forgotten)"
+
+
+async def test_three_logins_two_attempts_no_false_retry_event(settings, store, tmp_path):
+    add_login(settings, "aaa")
+    add_login(settings, "bbb")
+    pool = LoginPool(settings, store)
+    events = []
+    res = await Runner(settings, pool=pool, on_event=lambda k, p: events.append(k)).run(
+        SparTask("q"), build_specs("codex:1@limited-zzz", settings), tmp_path)
+    run = res.runs[0]
+    assert run.outcome == Outcome.RATE_LIMITED
+    assert events.count("reviewer_retry") == 1          # two attempts, one retry
+    assert run.usage.input_tokens is None or run.usage.input_tokens >= 0

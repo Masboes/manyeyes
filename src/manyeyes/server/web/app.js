@@ -630,7 +630,7 @@ function eventText(ev) {
       return [h("span", { class: bad ? "ev-fail" : null }, `${p.reviewer} ${bad ? outcomeLabel(p.outcome).toLowerCase() : "finished"}`),
         h("span", { class: "faint" }, ` · ${fmtDur(p.duration_s)}${p.login && p.login !== "default" ? ` · login ${p.login}` : ""}${p.reason ? ` · ${p.reason}` : ""}`)];
     }
-    case "reviewer_retry": return [`${p.reviewer} hit the rate limit on login ${p.login}; it runs again on another login`];
+    case "reviewer_retry": return [`${p.reviewer} ${p.outcome === "auth_failed" ? "could not sign in with" : "hit the rate limit on"} login ${p.login}; it runs again on another login`];
     case "quorum_reached": return [`Quorum reached with ${p.successes} reviews. The others get ${fmtDur(p.grace_s)}.`];
     case "synth_started": return ["Writing the synthesis"];
     case "synth_finished": return [`Synthesis ${p.outcome === "success" ? "done" : p.outcome}`, h("span", { class: "faint" }, ` · ${fmtDur(p.duration_s)}${p.note ? ` · ${p.note}` : ""}`)];

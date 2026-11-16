@@ -49,13 +49,19 @@ EventFn = Callable[[str, dict[str, Any]], Awaitable[None] | None]
 KILL_GRACE_S = 3.0
 MAX_ATTEMPTS = 2   # with a login pool: the first login, then one other
 # Words of a used-up plan, as opposed to a passing 429 or an overloaded provider.
-PLAN_LIMIT_RE = re.compile(r"usage limit|limit (has been )?reached|reached .*limit|quota|"
-                           r"weekly.*limit|daily.*limit|out of (credits|messages)",
-                           re.IGNORECASE)
+# Codex: "You've hit your usage limit." Claude: "5-hour limit reached ∙ resets 3pm",
+# "Claude AI usage limit reached". A per-minute throttle ("try again in 2 seconds")
+# is not a used-up plan.
+PLAN_LIMIT_RE = re.compile(r"usage limit|quota|(5-hour|weekly|daily|session|opus|sonnet) "
+                           r"limit|limit reached.{0,40}resets|hit your limit|"
+                           r"out of (credits|messages)", re.IGNORECASE)
+THROTTLE_RE = re.compile(r"try again in \d+(\.\d+)? ?(ms|s|sec|seconds?)\b|per minute|"
+                         r"requests per|tokens per min", re.IGNORECASE)
 
 
-def plan_limit(reason: str) -> bool:
-    return bool(PLAN_LIMIT_RE.search(reason or ""))
+def plan_limit(text: str) -> bool:
+    """A used-up plan, not a passing throttle."""
+    return bool(PLAN_LIMIT_RE.search(text or "")) and not THROTTLE_RE.search(text or "")
 DRAIN_S = 5.0
 # Room kept before the job deadline, on top of the synthesis timeout: the
 # kill itself, the result rendering and the store writes.
@@ -74,8 +80,13 @@ class _Proc:
         self.kill_reason: Outcome | None = None
         self.kill_detail = ""   # failure_reason for this kill, when the default is wrong
         self.stopped = asyncio.Event()   # set on the first kill: ends a wait for a slot
+        # Any kill request, also one that came after the process had exited: a
+        # retry on another login must never start after it.
+        self.stop_requested: tuple[Outcome, str] | None = None
 
     async def kill(self, reason: Outcome, detail: str = "") -> None:
+        if self.stop_requested is None:
+            self.stop_requested = (reason, detail)
         p = self.proc
         if p is not None and p.returncode is not None:
             # It exited on its own: keep its real result, but reap any child
@@ -221,7 +232,15 @@ class Runner:
             first: ReviewerRun | None = None
             tried: tuple[str, ...] = ()
             end = time.monotonic() + limit
-            for _ in range(MAX_ATTEMPTS):
+            for attempt in range(MAX_ATTEMPTS):
+                if self._cancelled or handle.kill_reason or handle.stop_requested:
+                    if first is not None:
+                        return first
+                    reason, detail = handle.stop_requested or (handle.kill_reason, "")
+                    now = time.time()
+                    return ReviewerRun(rev.spec, reason or Outcome.CANCELLED, started_at=now,
+                                       finished_at=now,
+                                       failure_reason=detail or "cancelled before start")
                 login = self.pool.pick(rev.kind, exclude=tried, settings=self.s)
                 if login is None:
                     if first is not None:
@@ -234,15 +253,17 @@ class Runner:
                 self.pool.acquire(login)
                 try:
                     run = await self._attempt(rev, prompt, workdir, extra_ro, slot=False,
-                                              timeout_s=max(1.0, end - time.monotonic()))
+                                              end=end)
                 finally:
                     self.pool.release(login)
                 run.login = login.name
                 if first is not None:
                     run.started_at = first.started_at   # the reviewer's whole time
+                    run.usage = first.usage.add(run.usage)   # and all its tokens
                 if run.outcome not in (Outcome.RATE_LIMITED, Outcome.AUTH_FAILED):
                     return run
-                if run.outcome == Outcome.RATE_LIMITED and plan_limit(run.failure_reason):
+                if run.outcome == Outcome.RATE_LIMITED and plan_limit(
+                        f"{run.failure_reason}\n{run.failure_detail}"):
                     until = self.pool.rest(login, settings=self.s)
                 else:
                     until = None   # a passing 429 or an expired login: no rest
@@ -251,7 +272,9 @@ class Runner:
                 # Forget the finished process: a kill from now on must stop the
                 # next attempt (or its start), not reap the old one.
                 handle.proc = None
-                if (self._cancelled or handle.kill_reason is not None
+                if (attempt + 1 >= MAX_ATTEMPTS
+                        or self._cancelled or handle.kill_reason is not None
+                        or handle.stop_requested is not None
                         or end - time.monotonic() < min(30.0, limit / 4)
                         or not self.pool.has_other(rev.kind, tried, settings=self.s)):
                     return run
@@ -262,7 +285,9 @@ class Runner:
 
     async def _attempt(self, rev: Reviewer, prompt: str, workdir: Path,
                        extra_ro: list[Path], *, slot: bool = True,
-                       timeout_s: float | None = None) -> ReviewerRun:
+                       end: float | None = None) -> ReviewerRun:
+        """One process run. `end` (time.monotonic) is the reviewer's own deadline
+        across attempts; without it, limits.reviewer_timeout_s from the start."""
         spec = rev.spec
         handle = self._procs[spec.name]
         async with self._slot(handle) if slot else nullcontext():
@@ -316,9 +341,10 @@ class Runner:
                 await handle.kill(handle.kill_reason or Outcome.CANCELLED)
             out, err = bytearray(), bytearray()
             readers = asyncio.gather(_read_all(proc.stdout, out), _read_all(proc.stderr, err))
-            timeout = timeout_s or float(self.s["limits.reviewer_timeout_s"])
+            timeout = float(self.s["limits.reviewer_timeout_s"])
+            wait_s = timeout if end is None else max(0.1, end - time.monotonic())
             try:
-                await asyncio.wait_for(proc.wait(), timeout=timeout)
+                await asyncio.wait_for(proc.wait(), timeout=wait_s)
             except TimeoutError:
                 await handle.kill(Outcome.TIMEOUT)
             except asyncio.CancelledError:

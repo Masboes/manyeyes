@@ -313,6 +313,21 @@ class Store:
 
     # -- reviewer logins ----------------------------------------------------
 
+    def extend_rest(self, kind: str, name: str, until: float, by: str) -> float:
+        """Rest a login until `until` or its current rest end, whichever is later,
+        in one statement: a CLI and a server sharing the database never shorten
+        each other's rest. Returns the end of the rest."""
+        with self._lock, self._conn() as c:
+            c.execute(
+                "INSERT INTO logins (kind, name, resting_until, updated_at, updated_by) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(kind, name) DO UPDATE SET resting_until="
+                "MAX(COALESCE(logins.resting_until, 0), excluded.resting_until), "
+                "updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+                (kind, name, until, time.time(), by))
+            row = c.execute("SELECT resting_until FROM logins WHERE kind=? AND name=?",
+                            (kind, name)).fetchone()
+        return float(row[0])
+
     def login_states(self) -> dict[tuple[str, str], dict[str, Any]]:
         return {(r["kind"], r["name"]): r for r in self._all("SELECT * FROM logins")}
 
@@ -386,3 +401,5 @@ class Store:
             c.execute("DELETE FROM jobs WHERE LOWER(requested_by)=?", who)
             c.execute("UPDATE settings_overrides SET updated_by='(forgotten)' "
                       "WHERE LOWER(updated_by)=?", who)
+            c.execute("UPDATE logins SET updated_by='(forgotten)' WHERE LOWER(updated_by)=?",
+                      who)

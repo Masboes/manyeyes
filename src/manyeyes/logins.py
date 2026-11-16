@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 DEFAULT = "default"
 KINDS = ("codex", "claude")
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")   # use fullmatch: no trailing newline
-FULL_PCT = 98.0         # a plan window this full blocks the login
+FULL_PCT = 98.0         # rest(): a window this full sets when the rest ends
 # The file that proves a login home is logged in.
 LOGIN_FILES = {"codex": "auth.json", "claude": ".credentials.json"}
 UNKNOWN_USED = 50.0     # score of a login without a recent usage reading
@@ -162,9 +162,8 @@ class LoginPool:
                     and r["resets_at"] and r["resets_at"] > now]
             if full:
                 until = max(r["resets_at"] for r in full)
-            until = max(until, self.resting_until(login) or 0)
-            self.store.set_login(login.kind, login.name, resting_until=until,
-                                 by="manyeyes (rate limit)")
+            until = self.store.extend_rest(login.kind, login.name, until,
+                                           by="manyeyes (rate limit)")
         else:
             until = max(until, self._rest.get(login.key, 0))
             self._rest[login.key] = until
