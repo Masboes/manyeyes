@@ -64,10 +64,11 @@ def render_markdown(title: str, result: SwarmResult, *, include_reviews: bool = 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def result_dict(result: SwarmResult) -> dict[str, Any]:
+def result_dict(result: SwarmResult, notes: tuple[str, ...] = ()) -> dict[str, Any]:
     s = result.synth
     return {
         "status": result.status,
+        "notes": list(notes),
         "partial": result.partial,
         "outcomes": result.outcome_counts,
         "synthesis": s.text if s and s.outcome == "success" else None,

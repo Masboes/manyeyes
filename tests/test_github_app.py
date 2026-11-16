@@ -411,3 +411,12 @@ def test_result_comment_shows_the_notes():
     out = result_comment(job, None)
     assert f"{NOTE_PREFIX}MANYEYES.md was not used." in out
     assert out.index("MANYEYES.md") < out.index("All good.")
+
+
+
+def test_result_comment_keeps_notes_without_a_synthesis():
+    from manyeyes.engine.bundle import NOTE_PREFIX
+    md = f"# Review\n\n{NOTE_PREFIX}The pull request comments were not read.\n\n## Synthesis\n"
+    for status in ("done", "failed"):
+        out = result_comment({"status": status, "result_md": md, "error": "x"}, None)
+        assert "were not read" in out

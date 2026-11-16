@@ -27,6 +27,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..engine.bundle import NOTE_PREFIX
+from ..sources import TRUSTED_ASSOCIATIONS
 
 if TYPE_CHECKING:
     from ..config import Settings
@@ -41,7 +42,6 @@ API = "https://api.github.com"
 MAX_COMMENT = 60_000
 # Only people GitHub lists as owner, member or collaborator of the repository can
 # start a review. On a public repository, strangers cannot spend the plan.
-TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
 MODES = ("quick", "full", "deep")
 # GitHub caps webhook payloads at 25 MB; a comment event is far smaller.
 MAX_BODY = 5 * 1024 * 1024
@@ -171,17 +171,17 @@ def result_comment(job: dict[str, Any], job_url: str | None) -> str:
     link = f"[Full result with every review]({job_url})" if job_url else ""
     status = job.get("status")
     synthesis = job.get("synthesis_md") or ""
+    # The notes are fixed texts from manyeyes itself (see sources.py).
+    top = (job.get("result_md") or "").split("\n## Synthesis", 1)[0]
+    notes = "\n\n".join(ln for ln in top.splitlines() if ln.startswith(NOTE_PREFIX))
     if status == "done" and synthesis:
         sha = (job.get("head_sha") or "")[:7]
         head = f"{who} manyeyes reviewed commit {sha}.".strip() if sha else \
             f"{who} manyeyes finished the review.".strip()
         if job.get("partial"):
             head += " Some reviewers did not finish; the result is partial."
-        # The notes are fixed texts from manyeyes itself (see sources.py).
-        top = (job.get("result_md") or "").split("\n## Synthesis", 1)[0]
-        notes = [ln for ln in top.splitlines() if ln.startswith(NOTE_PREFIX)]
         if notes:
-            head += "\n\n" + "\n\n".join(notes)
+            head += "\n\n" + notes
         # Defuse first, then cut: the cut sees the final length.
         body = _defuse_mentions(synthesis)
         room = MAX_COMMENT - len(head) - len(link) - 300
@@ -196,7 +196,7 @@ def result_comment(job: dict[str, Any], job_url: str | None) -> str:
         msg = f"{who} The manyeyes review was cancelled."
     else:
         msg = f"{who} The manyeyes review failed: {_failure(job.get('error') or '')}"
-    return "\n\n".join(p for p in (msg.strip(), link) if p)
+    return "\n\n".join(p for p in (msg.strip(), notes, link) if p)
 
 
 class GitHubApp:

@@ -109,9 +109,11 @@ def _guide_size(path: str, out: str) -> int:
 
 def _guide_note(e: BaseException) -> str:
     """A fixed, short reason for the result: never raw git output."""
-    if "larger than" in str(e):
+    msg = str(e)
+    if "larger than" in msg:
         why = f"it is larger than {GUIDE_MAX_BYTES // 1000} KB"
-    elif isinstance(e, (TimeoutError, subprocess.TimeoutExpired)) or "time" in str(e):
+    elif (isinstance(e, (TimeoutError, subprocess.TimeoutExpired))
+          or msg.startswith("timed out after") or msg == "no time left"):
         why = "it could not be read in time"
     else:
         why = "git could not read it"
@@ -557,49 +559,81 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + " [cut]"
 
 
-def _human(item: dict) -> str | None:
-    """The login of a person; None for a bot or a deleted user."""
+# The same people who can start a review from a PR comment (github_app.py).
+TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+
+
+def _trusted_person(item: dict, pr_author: str) -> str | None:
+    """The login of a person the repository trusts, or the PR's own author.
+
+    None for a bot, a deleted user, and anyone else: a stranger's comment on a
+    public repository must not reach the reviewers.
+    """
     user = item.get("user") or {}
-    if not user.get("login") or user.get("type") == "Bot":
+    login = str(user.get("login") or "")
+    if not login or user.get("type") == "Bot" or login.endswith("[bot]"):
         return None
-    return str(user["login"])
+    if login == pr_author or item.get("author_association") in TRUSTED_ASSOCIATIONS:
+        return login
+    return None
 
 
-async def _github_list(url: str, token: str) -> list[dict]:
-    out: list[dict] = []
-    for page in range(1, PR_PAGES + 1):
-        try:
-            r = await _github_get(f"{url}?per_page=100&page={page}", _gh_headers(token))
-        except httpx.TransportError as e:
-            raise SourceError(f"cannot reach GitHub: {type(e).__name__}") from e
-        if r.status_code != 200:
-            raise SourceError(f"GitHub returned {r.status_code}")
-        items = r.json()
-        out += items
-        if len(items) < 100:
-            break
-    return out
+_LAST_PAGE = re.compile(r'[?&]page=(\d+)[^>]*>;\s*rel="last"')
+
+
+async def _github_page(url: str, token: str, page: int) -> httpx.Response:
+    try:
+        r = await _github_get(f"{url}?per_page=100&page={page}", _gh_headers(token))
+    except httpx.TransportError as e:
+        raise SourceError(f"cannot reach GitHub: {type(e).__name__}") from e
+    if r.status_code != 200:
+        raise SourceError(f"GitHub returned {r.status_code}")
+    return r
+
+
+async def _github_list(url: str, token: str) -> tuple[list[dict], int]:
+    """The newest PR_PAGES pages of a list (GitHub lists oldest first), and how
+    many older items were skipped (about: 100 per skipped page)."""
+    first = await _github_page(url, token, 1)
+    m = _LAST_PAGE.search(first.headers.get("link", ""))
+    last = int(m.group(1)) if m else 1
+    if last <= PR_PAGES:
+        pages = [first] + [await _github_page(url, token, n) for n in range(2, last + 1)]
+        skipped = 0
+    else:
+        start = last - PR_PAGES + 1
+        pages = [await _github_page(url, token, n) for n in range(start, last + 1)]
+        skipped = (start - 1) * 100
+    items: list[dict] = []
+    for r in pages:
+        data = r.json()
+        if not isinstance(data, list):
+            raise SourceError("GitHub returned an unexpected answer")
+        items += [x for x in data if isinstance(x, dict)]
+    return items, skipped
 
 
 async def pr_context(repo: str, pr: int, token: str, data: dict) -> PRContext:
     """Title, description and the human comments of a pull request.
 
-    Bots are left out: the result of an earlier review (by manyeyes or any
-    other bot) would anchor the reviewers, and each review must stay
-    independent.
+    Only the PR's author and the people the repository trusts count (see
+    _trusted_person). Bots are left out: the result of an earlier review (by
+    manyeyes or any other bot) would anchor the reviewers, and each review must
+    stay independent.
     """
     base = f"https://api.github.com/repos/{repo}"
-    issue, inline, reviews = await asyncio.gather(
+    author = str((data.get("user") or {}).get("login") or "unknown")
+    (issue, s1), (inline, s2), (reviews, s3) = await asyncio.gather(
         _github_list(f"{base}/issues/{pr}/comments", token),
         _github_list(f"{base}/pulls/{pr}/comments", token),
         _github_list(f"{base}/pulls/{pr}/reviews", token))
     found: list[PRComment] = []
     for c in issue:
-        if (who := _human(c)) and (c.get("body") or "").strip():
+        if (who := _trusted_person(c, author)) and (c.get("body") or "").strip():
             found.append(PRComment(who, c.get("created_at") or "",
                                    _clip(c["body"], PR_COMMENT_MAX)))
     for c in inline:
-        if (who := _human(c)) and (c.get("body") or "").strip():
+        if (who := _trusted_person(c, author)) and (c.get("body") or "").strip():
             line = c.get("line") or c.get("original_line")
             where = f"{c.get('path', '')}:{line}" if line else str(c.get("path") or "")
             found.append(PRComment(who, c.get("created_at") or "",
@@ -608,7 +642,7 @@ async def pr_context(repo: str, pr: int, token: str, data: dict) -> PRContext:
         state = {"APPROVED": "approved", "CHANGES_REQUESTED": "changes requested"}.get(
             rv.get("state") or "", "")
         body = (rv.get("body") or "").strip()
-        if (who := _human(rv)) and (body or state):
+        if (who := _trusted_person(rv, author)) and (body or state):
             found.append(PRComment(who, rv.get("submitted_at") or "",
                                    _clip(body, PR_COMMENT_MAX) or "(no text)", state=state))
     found.sort(key=lambda c: c.created_at)
@@ -620,10 +654,9 @@ async def pr_context(repo: str, pr: int, token: str, data: dict) -> PRContext:
             break
         kept.append(c)
     kept.reverse()
-    author = (data.get("user") or {}).get("login") or "unknown"
-    return PRContext(title=_clip(data.get("title") or "", 300), author=str(author),
+    return PRContext(title=_clip(data.get("title") or "", 300), author=author,
                      body=_clip(data.get("body") or "", PR_BODY_MAX),
-                     comments=tuple(kept), left_out=len(found) - len(kept))
+                     comments=tuple(kept), left_out=len(found) - len(kept) + s1 + s2 + s3)
 
 
 async def _kill_group(proc: asyncio.subprocess.Process) -> None:
@@ -775,16 +808,18 @@ async def clone_review(repo: str, dest: Path, *, token: str, timeout: float,
     if pr is None or not with_pr_context:
         return task
     left = min(PR_CONTEXT_TIMEOUT_S, timeout - (time.monotonic() - start) - 2)
-    try:
-        if left < 1:
-            raise TimeoutError
-        ctx = await asyncio.wait_for(pr_context(repo, pr, token, data), timeout=left)
-    except (SourceError, TimeoutError, ValueError) as e:
-        log.warning("cannot read the comments of %s#%s: %s", repo, pr, str(e) or "timed out")
-        why = ("GitHub did not answer in time" if isinstance(e, TimeoutError)
-               else "GitHub refused or failed the request")
-        return dataclasses.replace(task, notes=(*task.notes, PR_CONTEXT_NOTE.format(why=why)))
-    return dataclasses.replace(task, pr_context=ctx)
+    if left < 1:
+        why = "no time was left after the clone"
+    else:
+        try:
+            ctx = await asyncio.wait_for(pr_context(repo, pr, token, data), timeout=left)
+            return dataclasses.replace(task, pr_context=ctx)
+        except TimeoutError:
+            why = "GitHub did not answer in time"
+        except Exception as e:  # noqa: BLE001 - optional context: never fail the review
+            log.warning("cannot read the comments of %s#%s: %s", repo, pr, e)
+            why = "GitHub refused or failed the request"
+    return dataclasses.replace(task, notes=(*task.notes, PR_CONTEXT_NOTE.format(why=why)))
 
 
 async def _clone(repo: str, dest: Path, env: dict[str, str], timeout: float, pr: int | None,

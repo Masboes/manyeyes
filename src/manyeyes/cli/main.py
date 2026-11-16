@@ -244,7 +244,8 @@ async def _swarm(args: argparse.Namespace, s: Settings) -> int:
     full_md = render_markdown(job_title(store.get_job(job["id"]) or job), result, notes=notes)
     path = _write_private(s.data_dir / "results", f"{job['id']}.md", full_md)
     if args.json:
-        print(json.dumps({"id": job["id"], **result_dict(result)}, indent=2, default=str))
+        print(json.dumps({"id": job["id"], **result_dict(result, notes)}, indent=2,
+                         default=str))
     else:
         print(full_md if args.full else render_markdown(
             job_title(job), result, include_reviews=False, notes=notes))
