@@ -23,12 +23,13 @@ import asyncio
 import logging
 import math
 import os
+import re
 import shutil
 import signal
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -46,6 +47,15 @@ if TYPE_CHECKING:
 log = logging.getLogger("manyeyes.runner")
 EventFn = Callable[[str, dict[str, Any]], Awaitable[None] | None]
 KILL_GRACE_S = 3.0
+MAX_ATTEMPTS = 2   # with a login pool: the first login, then one other
+# Words of a used-up plan, as opposed to a passing 429 or an overloaded provider.
+PLAN_LIMIT_RE = re.compile(r"usage limit|limit (has been )?reached|reached .*limit|quota|"
+                           r"weekly.*limit|daily.*limit|out of (credits|messages)",
+                           re.IGNORECASE)
+
+
+def plan_limit(reason: str) -> bool:
+    return bool(PLAN_LIMIT_RE.search(reason or ""))
 DRAIN_S = 5.0
 # Room kept before the job deadline, on top of the synthesis timeout: the
 # kill itself, the result rendering and the store writes.
@@ -197,43 +207,65 @@ class Runner:
 
     async def _run_one(self, rev: Reviewer, prompt: str, workdir: Path,
                        extra_ro: list[Path]) -> ReviewerRun:
-        """One reviewer. With a login pool: on a rate limit, the login rests and
-        the reviewer runs once more on another login, when one is awake."""
+        """One reviewer. With a login pool, the login is chosen once the reviewer
+        has a slot. On a rate limit or a failed login, the reviewer runs once
+        more on another login, within the same reviewer time limit. A plan limit
+        also puts the login to rest."""
         if self.pool is None:
             run = await self._attempt(rev, prompt, workdir, extra_ro)
             run.login = rev.login
             return run
-        tried: tuple[str, ...] = ()
-        while True:
-            login = self.pool.pick(rev.kind, exclude=tried)
-            if login is None:
-                now = time.time()
-                return ReviewerRun(rev.spec, Outcome.AUTH_FAILED, started_at=now,
-                                   finished_at=now, failure_reason=self.pool.why_none(rev.kind))
-            rev.login = login.name
-            self.pool.acquire(login)
-            try:
-                run = await self._attempt(rev, prompt, workdir, extra_ro)
-            finally:
-                self.pool.release(login)
-            run.login = login.name
-            if run.outcome != Outcome.RATE_LIMITED:
-                return run
-            until = self.pool.rest(login)
-            tried += (login.name,)
-            handle = self._procs[rev.spec.name]
-            if (self._cancelled or handle.kill_reason is not None
-                    or not self.pool.has_other(rev.kind, tried)):
-                return run
-            await _emit(self.on_event, "reviewer_retry",
-                        {"reviewer": rev.spec.name, "login": login.name,
-                         "resting_until": until})
+        handle = self._procs[rev.spec.name]
+        limit = float(self.s["limits.reviewer_timeout_s"])
+        async with self._slot(handle):
+            first: ReviewerRun | None = None
+            tried: tuple[str, ...] = ()
+            end = time.monotonic() + limit
+            for _ in range(MAX_ATTEMPTS):
+                login = self.pool.pick(rev.kind, exclude=tried, settings=self.s)
+                if login is None:
+                    if first is not None:
+                        return first     # keep the real failure, not "no login"
+                    now = time.time()
+                    return ReviewerRun(rev.spec, Outcome.AUTH_FAILED, started_at=now,
+                                       finished_at=now,
+                                       failure_reason=self.pool.why_none(rev.kind, self.s))
+                rev.login = login.name
+                self.pool.acquire(login)
+                try:
+                    run = await self._attempt(rev, prompt, workdir, extra_ro, slot=False,
+                                              timeout_s=max(1.0, end - time.monotonic()))
+                finally:
+                    self.pool.release(login)
+                run.login = login.name
+                if first is not None:
+                    run.started_at = first.started_at   # the reviewer's whole time
+                if run.outcome not in (Outcome.RATE_LIMITED, Outcome.AUTH_FAILED):
+                    return run
+                if run.outcome == Outcome.RATE_LIMITED and plan_limit(run.failure_reason):
+                    until = self.pool.rest(login, settings=self.s)
+                else:
+                    until = None   # a passing 429 or an expired login: no rest
+                first = first or run
+                tried += (login.name,)
+                # Forget the finished process: a kill from now on must stop the
+                # next attempt (or its start), not reap the old one.
+                handle.proc = None
+                if (self._cancelled or handle.kill_reason is not None
+                        or end - time.monotonic() < min(30.0, limit / 4)
+                        or not self.pool.has_other(rev.kind, tried, settings=self.s)):
+                    return run
+                await _emit(self.on_event, "reviewer_retry",
+                            {"reviewer": rev.spec.name, "login": login.name,
+                             "outcome": str(run.outcome), "resting_until": until})
+            return run
 
     async def _attempt(self, rev: Reviewer, prompt: str, workdir: Path,
-                       extra_ro: list[Path]) -> ReviewerRun:
+                       extra_ro: list[Path], *, slot: bool = True,
+                       timeout_s: float | None = None) -> ReviewerRun:
         spec = rev.spec
         handle = self._procs[spec.name]
-        async with self._slot(handle):
+        async with self._slot(handle) if slot else nullcontext():
             if self._cancelled or handle.kill_reason is not None:
                 now = time.time()
                 return ReviewerRun(spec, handle.kill_reason or Outcome.CANCELLED,
@@ -284,7 +316,7 @@ class Runner:
                 await handle.kill(handle.kill_reason or Outcome.CANCELLED)
             out, err = bytearray(), bytearray()
             readers = asyncio.gather(_read_all(proc.stdout, out), _read_all(proc.stderr, err))
-            timeout = float(self.s["limits.reviewer_timeout_s"])
+            timeout = timeout_s or float(self.s["limits.reviewer_timeout_s"])
             try:
                 await asyncio.wait_for(proc.wait(), timeout=timeout)
             except TimeoutError:

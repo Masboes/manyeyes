@@ -72,8 +72,6 @@ async def run_job(store: Store, settings: Settings, job: dict[str, Any], task: T
             progress(kind, light)
 
     specs = build_specs(job["roster"], settings)
-    if pool is not None:
-        pool.settings = settings   # this job's settings (limits.login_rest_s can change)
     runner = Runner(settings, run_dir=settings.data_dir / "run" / job_id,
                     slots=slots, on_event=on_event, pool=pool)
     if on_runner:

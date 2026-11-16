@@ -364,9 +364,8 @@ async def _doctor(args: argparse.Namespace, s: Settings) -> int:
         line(bool(b) if needed else (True if b else None), f"{kind} CLI", version or "missing")
         from ..logins import list_logins
         logins = list_logins(s.auth_dir, kind)
-        if not any(x.name == "default" for x in logins):
-            line(rev.is_logged_in() if needed else (True if rev.is_logged_in() else None),
-                 f"{kind} login", str(rev.auth_home))
+        if not logins:
+            line(False if needed else None, f"{kind} login", f"none in {s.auth_dir}")
         for x in logins:
             label = f"{kind} login" + ("" if x.name == "default" else f" '{x.name}'")
             line(x.logged_in if needed else (True if x.logged_in else None), label, str(x.home))
@@ -387,9 +386,10 @@ async def _doctor(args: argparse.Namespace, s: Settings) -> int:
 
     if args.probe:
         from ..engine.runner import Runner
+        from ..logins import LoginPool
         for kind in sorted(roster_kinds):
             specs = build_specs(f"{kind}:1", s)
-            r = Runner(s.with_layer("flag", {"synth.enabled": False}))
+            r = Runner(s.with_layer("flag", {"synth.enabled": False}), pool=LoginPool(s, None))
             probe_dir = s.data_dir / "run" / "probe"
             probe_dir.mkdir(parents=True, exist_ok=True)
             res = await r.run(SparTask("Reply with the single word: ok"), specs, probe_dir)

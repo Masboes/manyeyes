@@ -23,7 +23,8 @@ if TYPE_CHECKING:
 
 DEFAULT = "default"
 KINDS = ("codex", "claude")
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")   # use fullmatch: no trailing newline
+FULL_PCT = 98.0         # a plan window this full blocks the login
 # The file that proves a login home is logged in.
 LOGIN_FILES = {"codex": "auth.json", "claude": ".credentials.json"}
 UNKNOWN_USED = 50.0     # score of a login without a recent usage reading
@@ -35,7 +36,7 @@ class LoginError(ValueError):
 
 
 def check_name(name: str) -> str:
-    if name != DEFAULT and not NAME_RE.match(name or ""):
+    if name != DEFAULT and not NAME_RE.fullmatch(name or ""):
         raise LoginError("a login name is 1-32 characters: a-z, 0-9 and '-', "
                          "starting with a letter or digit")
     return name
@@ -70,12 +71,13 @@ def list_logins(auth_dir: Path, kind: str | None = None) -> list[Login]:
         named = []
         if auth_dir.is_dir():
             for p in auth_dir.iterdir():
-                if p.is_dir() and not p.is_symlink() and p.name.startswith(f"{k}@"):
+                if p.is_dir() and p.name.startswith(f"{k}@"):
                     name = p.name[len(k) + 1:]
-                    if NAME_RE.match(name):
+                    # "default" is auth/<kind> itself, never auth/<kind>@default.
+                    if name != DEFAULT and NAME_RE.fullmatch(name):
                         named.append(Login(k, name, p))
         home = auth_dir / k
-        if home.is_dir() and not home.is_symlink():
+        if home.is_dir():
             out.append(Login(k, DEFAULT, home))
         out += sorted(named, key=lambda x: x.name)
     return out
@@ -100,11 +102,11 @@ class LoginPool:
         until = st.get("resting_until") or self._rest.get(login.key)
         return until if until and until > time.time() else None
 
-    def _used(self, login: Login) -> float:
+    def _used(self, login: Login, settings: Settings) -> float:
         """The fullest plan window of the newest recent reading, in percent."""
         if not self.store:
             return UNKNOWN_USED
-        interval = int(self.settings["usage.interval_min"]) or 30
+        interval = int(settings["usage.interval_min"]) or 30
         rows = self.store.latest_usage(login.kind, login.name,
                                        time.time() - max(3 * interval * 60, 3600))
         used = [r["used_percent"] for r in rows if r["used_percent"] is not None]
@@ -112,28 +114,31 @@ class LoginPool:
 
     # -- choice -----------------------------------------------------------
 
-    def pick(self, kind: str, exclude: tuple[str, ...] = ()) -> Login | None:
+    def pick(self, kind: str, exclude: tuple[str, ...] = (),
+             settings: Settings | None = None) -> Login | None:
         """The login for one reviewer, or None when no login of `kind` can run.
 
         With every usable login resting, the one whose rest ends first: the rest
         is an estimate, and a reviewer that hits the limit again fails fast.
         """
+        s = settings or self.settings
         states = self._states()
-        usable = [x for x in list_logins(self.settings.auth_dir, kind)
+        usable = [x for x in list_logins(s.auth_dir, kind)
                   if x.logged_in and x.name not in exclude
                   and (states.get(x.key) or {}).get("enabled", 1)]
         awake = [x for x in usable if self.resting_until(x, states) is None]
         if awake:
-            return min(awake, key=lambda x: (self._used(x) + INFLIGHT_WEIGHT * self.inflight[x.key],
+            return min(awake, key=lambda x: (self._used(x, s) + INFLIGHT_WEIGHT * self.inflight[x.key],
                                              x.name != DEFAULT, x.name))
         if usable and not exclude:
             return min(usable, key=lambda x: self.resting_until(x, states) or 0)
         return None
 
-    def why_none(self, kind: str) -> str:
-        logins = list_logins(self.settings.auth_dir, kind)
+    def why_none(self, kind: str, settings: Settings | None = None) -> str:
+        s = settings or self.settings
+        logins = list_logins(s.auth_dir, kind)
         if not any(x.logged_in for x in logins):
-            return f"auth: no {kind} login in {self.settings.auth_dir}"
+            return f"auth: no {kind} login in {s.auth_dir}"
         return f"auth: every {kind} login is switched off (see the usage panel)"
 
     def acquire(self, login: Login) -> None:
@@ -144,26 +149,32 @@ class LoginPool:
         if self.inflight[login.key] <= 0:
             del self.inflight[login.key]
 
-    def rest(self, login: Login) -> float:
-        """Rest a login after a rate limit: until the fullest window resets, when a
-        reading says so, else for limits.login_rest_s. Returns the end time."""
+    def rest(self, login: Login, settings: Settings | None = None) -> float:
+        """Rest a login after a plan limit. Until the full window (FULL_PCT or
+        more) resets, when a reading shows one; else for limits.login_rest_s. A
+        rest never gets shorter. Returns the end time."""
+        s = settings or self.settings
         now = time.time()
-        until = now + float(self.settings["limits.login_rest_s"])
+        until = now + float(s["limits.login_rest_s"])
         if self.store:
             rows = self.store.latest_usage(login.kind, login.name, now - 6 * 3600)
-            full = [r for r in rows if (r["used_percent"] or 0) >= 90 and r["resets_at"]
-                    and r["resets_at"] > now]
+            full = [r for r in rows if (r["used_percent"] or 0) >= FULL_PCT
+                    and r["resets_at"] and r["resets_at"] > now]
             if full:
                 until = max(r["resets_at"] for r in full)
+            until = max(until, self.resting_until(login) or 0)
             self.store.set_login(login.kind, login.name, resting_until=until,
                                  by="manyeyes (rate limit)")
         else:
+            until = max(until, self._rest.get(login.key, 0))
             self._rest[login.key] = until
         return until
 
-    def has_other(self, kind: str, tried: tuple[str, ...]) -> bool:
+    def has_other(self, kind: str, tried: tuple[str, ...],
+                  settings: Settings | None = None) -> bool:
+        s = settings or self.settings
         states = self._states()
         return any(x.logged_in and x.name not in tried
                    and (states.get(x.key) or {}).get("enabled", 1)
                    and self.resting_until(x, states) is None
-                   for x in list_logins(self.settings.auth_dir, kind))
+                   for x in list_logins(s.auth_dir, kind))
