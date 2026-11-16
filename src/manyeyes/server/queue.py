@@ -273,7 +273,8 @@ class Worker:
                         job["repo"], work, token=token,
                         timeout=budget, pr=job.get("pr"),
                         head=job.get("head_ref"), base=job.get("base_ref"),
-                        instructions=job.get("prompt") or ""), timeout=budget)
+                        instructions=job.get("prompt") or "",
+                        with_pr_context=bool(s["review.pr_context"])), timeout=budget)
                 except TimeoutError:
                     self.store.update_job(job["id"], status="failed", finished_at=time.time(),
                                           error=f"could not prepare the code within {int(prep_s)}s")

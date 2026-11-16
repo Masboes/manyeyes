@@ -100,6 +100,6 @@ async def run_job(store: Store, settings: Settings, job: dict[str, Any], task: T
         store.update_job(job_id, status="failed", finished_at=time.time(),
                          error=f"{type(e).__name__}: {e}")
         raise
-    md = render_markdown(job_title(job), result)
+    md = render_markdown(job_title(job), result, notes=getattr(task, "notes", ()))
     store.finish_job(job_id, result, md)
     return result

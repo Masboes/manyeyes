@@ -57,6 +57,9 @@ KEYS: tuple[Key, ...] = (
         "traces callers and dependencies; about 3x slower and 5x the tokens). Quick runs are "
         "always standard, deep runs always thorough.", editable=True,
         choices=("standard", "thorough")),
+    Key("review.pr_context", bool, True,
+        "For a pull request, give the reviewers its title, description and human comments "
+        "(bots left out), marked as data, not instructions.", editable=True),
     Key("reviewers.codex.model", str, "gpt-6.1-sol", "Codex model.", editable=True),
     Key("reviewers.codex.effort", str, "medium", "Codex reasoning effort.", editable=True,
         choices=EFFORTS),

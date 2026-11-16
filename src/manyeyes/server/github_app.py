@@ -26,6 +26,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ..engine.bundle import NOTE_PREFIX
+
 if TYPE_CHECKING:
     from ..config import Settings
     from ..store.db import Store
@@ -175,6 +177,11 @@ def result_comment(job: dict[str, Any], job_url: str | None) -> str:
             f"{who} manyeyes finished the review.".strip()
         if job.get("partial"):
             head += " Some reviewers did not finish; the result is partial."
+        # The notes are fixed texts from manyeyes itself (see sources.py).
+        top = (job.get("result_md") or "").split("\n## Synthesis", 1)[0]
+        notes = [ln for ln in top.splitlines() if ln.startswith(NOTE_PREFIX)]
+        if notes:
+            head += "\n\n" + "\n\n".join(notes)
         # Defuse first, then cut: the cut sees the final length.
         body = _defuse_mentions(synthesis)
         room = MAX_COMMENT - len(head) - len(link) - 300

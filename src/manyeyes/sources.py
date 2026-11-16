@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 import logging
 import os
 import re
@@ -24,7 +25,7 @@ from pathlib import Path
 
 import httpx
 
-from .engine.task import ReviewTask
+from .engine.task import PRComment, PRContext, ReviewTask
 
 log = logging.getLogger(__name__)
 
@@ -106,7 +107,19 @@ def _guide_size(path: str, out: str) -> int:
     return size
 
 
-def local_guide(root: Path, base: str) -> tuple[str, str] | None:
+def _guide_note(e: BaseException) -> str:
+    """A fixed, short reason for the result: never raw git output."""
+    if "larger than" in str(e):
+        why = f"it is larger than {GUIDE_MAX_BYTES // 1000} KB"
+    elif isinstance(e, (TimeoutError, subprocess.TimeoutExpired)) or "time" in str(e):
+        why = "it could not be read in time"
+    else:
+        why = "git could not read it"
+    return f"The review standards file (MANYEYES.md) was not used: {why}."
+
+
+def local_guide(root: Path, base: str,
+                notes: list[str] | None = None) -> tuple[str, str] | None:
     """The review standards at `base` in a local repository, or None.
 
     Local objects only (GIT_NO_LAZY_FETCH, git 2.44 and later): a partial
@@ -132,11 +145,13 @@ def local_guide(root: Path, base: str) -> tuple[str, str] | None:
                 return guide
     except (OSError, ValueError, SourceError, subprocess.SubprocessError) as e:
         log.warning("cannot read the review standards at %s: %s", base, e)
+        if notes is not None:
+            notes.append(_guide_note(e))
     return None
 
 
-async def clone_guide(dest: Path, base_ref: str, env: dict[str, str],
-                      timeout: float) -> tuple[str, str] | None:
+async def clone_guide(dest: Path, base_ref: str, env: dict[str, str], timeout: float,
+                      notes: list[str] | None = None) -> tuple[str, str] | None:
     """The review standards at `base_ref` in a partial clone, or None.
 
     `cat-file -s` fetches a missing blob and gives its size, so the read that
@@ -158,6 +173,8 @@ async def clone_guide(dest: Path, base_ref: str, env: dict[str, str],
                 return guide
     except (ValueError, SourceError) as e:
         log.warning("cannot read the review standards at %s: %s", base_ref, e)
+        if notes is not None:
+            notes.append(_guide_note(e))
     return None
 
 
@@ -291,10 +308,12 @@ def local_review(path: Path, dest: Path, base: str | None = None,
         shutil.rmtree(dest, ignore_errors=True)
         raise
     name = repo_name(root)
+    notes: list[str] = []
+    guide = local_guide(root, base, notes)
     return LocalSource(root, dest, ReviewTask(
         label=name, base_ref=base, base_sha=base_sha, head_ref=head_ref,
         head_sha=head_sha, dirty=dirty, instructions=instructions,
-        guide=local_guide(root, base)), name)
+        guide=guide, notes=tuple(notes)), name)
 
 
 # --- context repositories ---------------------------------------------------
@@ -490,25 +509,121 @@ async def _github_get(url: str, headers: dict[str, str]) -> httpx.Response:
     raise AssertionError("unreachable")
 
 
-async def resolve_pr(repo: str, pr: int, token: str) -> tuple[str, str]:
-    """(head ref, base ref) of a pull request."""
+def _gh_headers(token: str) -> dict[str, str]:
     headers = {"Accept": "application/vnd.github+json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+async def _pr_json(repo: str, pr: int, token: str) -> dict:
     url = f"https://api.github.com/repos/{repo}/pulls/{pr}"
     try:
-        r = await _github_get(url, headers)
+        r = await _github_get(url, _gh_headers(token))
     except httpx.TransportError as e:
         raise SourceError(f"cannot reach GitHub for {repo}#{pr}: {type(e).__name__}") from e
     if r.status_code != 200:
         raise SourceError(f"GitHub returned {r.status_code} for {repo}#{pr}")
-    data = r.json()
+    return r.json()
+
+
+async def resolve_pr(repo: str, pr: int, token: str) -> tuple[str, str]:
+    """(head ref, base ref) of a pull request."""
+    return _pr_refs(repo, pr, await _pr_json(repo, pr, token))
+
+
+def _pr_refs(repo: str, pr: int, data: dict) -> tuple[str, str]:
     head, base = (data.get("head") or {}), (data.get("base") or {})
     head_repo = (head.get("repo") or {}).get("full_name")
     if head_repo is None or head_repo.lower() != repo.lower():
         # Fork PR, or the fork was deleted: fetch the PR ref itself.
         return f"refs/pull/{pr}/head", base.get("ref", "")
     return head.get("ref", ""), base.get("ref", "")
+
+
+# --- the pull request as people wrote it -------------------------------------
+
+PR_BODY_MAX = 8_000         # characters of the description
+PR_COMMENT_MAX = 2_000      # characters of one comment
+PR_COMMENTS_MAX = 16_000    # characters of all comments; the newest stay
+PR_PAGES = 3                # pages of 100 per comment list
+PR_CONTEXT_TIMEOUT_S = 20.0
+PR_CONTEXT_NOTE = ("The pull request description and comments were not read: {why}. "
+                   "The reviewers saw only the code.")
+
+
+def _clip(text: str, limit: int) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[:limit] + " [cut]"
+
+
+def _human(item: dict) -> str | None:
+    """The login of a person; None for a bot or a deleted user."""
+    user = item.get("user") or {}
+    if not user.get("login") or user.get("type") == "Bot":
+        return None
+    return str(user["login"])
+
+
+async def _github_list(url: str, token: str) -> list[dict]:
+    out: list[dict] = []
+    for page in range(1, PR_PAGES + 1):
+        try:
+            r = await _github_get(f"{url}?per_page=100&page={page}", _gh_headers(token))
+        except httpx.TransportError as e:
+            raise SourceError(f"cannot reach GitHub: {type(e).__name__}") from e
+        if r.status_code != 200:
+            raise SourceError(f"GitHub returned {r.status_code}")
+        items = r.json()
+        out += items
+        if len(items) < 100:
+            break
+    return out
+
+
+async def pr_context(repo: str, pr: int, token: str, data: dict) -> PRContext:
+    """Title, description and the human comments of a pull request.
+
+    Bots are left out: the result of an earlier review (by manyeyes or any
+    other bot) would anchor the reviewers, and each review must stay
+    independent.
+    """
+    base = f"https://api.github.com/repos/{repo}"
+    issue, inline, reviews = await asyncio.gather(
+        _github_list(f"{base}/issues/{pr}/comments", token),
+        _github_list(f"{base}/pulls/{pr}/comments", token),
+        _github_list(f"{base}/pulls/{pr}/reviews", token))
+    found: list[PRComment] = []
+    for c in issue:
+        if (who := _human(c)) and (c.get("body") or "").strip():
+            found.append(PRComment(who, c.get("created_at") or "",
+                                   _clip(c["body"], PR_COMMENT_MAX)))
+    for c in inline:
+        if (who := _human(c)) and (c.get("body") or "").strip():
+            line = c.get("line") or c.get("original_line")
+            where = f"{c.get('path', '')}:{line}" if line else str(c.get("path") or "")
+            found.append(PRComment(who, c.get("created_at") or "",
+                                   _clip(c["body"], PR_COMMENT_MAX), where=where))
+    for rv in reviews:
+        state = {"APPROVED": "approved", "CHANGES_REQUESTED": "changes requested"}.get(
+            rv.get("state") or "", "")
+        body = (rv.get("body") or "").strip()
+        if (who := _human(rv)) and (body or state):
+            found.append(PRComment(who, rv.get("submitted_at") or "",
+                                   _clip(body, PR_COMMENT_MAX) or "(no text)", state=state))
+    found.sort(key=lambda c: c.created_at)
+    kept: list[PRComment] = []
+    room = PR_COMMENTS_MAX
+    for c in reversed(found):          # the newest first, until the room is used
+        room -= len(c.text) + len(c.where) + 40
+        if room < 0:
+            break
+        kept.append(c)
+    kept.reverse()
+    author = (data.get("user") or {}).get("login") or "unknown"
+    return PRContext(title=_clip(data.get("title") or "", 300), author=str(author),
+                     body=_clip(data.get("body") or "", PR_BODY_MAX),
+                     comments=tuple(kept), left_out=len(found) - len(kept))
 
 
 async def _kill_group(proc: asyncio.subprocess.Process) -> None:
@@ -622,8 +737,12 @@ async def _fetch_branch_or_commit(repo_dir: Path, env: dict[str, str], timeout: 
 
 async def clone_review(repo: str, dest: Path, *, token: str, timeout: float,
                        pr: int | None = None, head: str | None = None,
-                       base: str | None = None, instructions: str = "") -> ReviewTask:
+                       base: str | None = None, instructions: str = "",
+                       with_pr_context: bool = True) -> ReviewTask:
     """Clone `repo` into `dest` with head and base fetched; return the task.
+
+    For a pull request, the task also carries the PR's title, description and
+    human comments (`with_pr_context`), best effort within the time left.
 
     A partial clone (commits and trees, no file contents) keeps large
     repositories fast. The checkout fetches every file at the head, and a diff
@@ -634,8 +753,10 @@ async def clone_review(repo: str, dest: Path, *, token: str, timeout: float,
     start = time.monotonic()   # `timeout` is also the caller's budget for all of this
     if not REPO_RE.match(repo or ""):
         raise SourceError(f"repo must look like owner/name, got {repo!r}")
+    data: dict = {}
     if pr is not None:
-        head, pr_base = await resolve_pr(repo, pr, token)
+        data = await _pr_json(repo, pr, token)
+        head, pr_base = _pr_refs(repo, pr, data)
         base = base or pr_base
     if not head:
         raise SourceError("give a PR number or a head branch")
@@ -647,10 +768,23 @@ async def clone_review(repo: str, dest: Path, *, token: str, timeout: float,
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
     try:
-        return await _clone(repo, dest, env, timeout, pr, head, base, instructions, start)
+        task = await _clone(repo, dest, env, timeout, pr, head, base, instructions, start)
     except BaseException:
         shutil.rmtree(dest, ignore_errors=True)
         raise
+    if pr is None or not with_pr_context:
+        return task
+    left = min(PR_CONTEXT_TIMEOUT_S, timeout - (time.monotonic() - start) - 2)
+    try:
+        if left < 1:
+            raise TimeoutError
+        ctx = await asyncio.wait_for(pr_context(repo, pr, token, data), timeout=left)
+    except (SourceError, TimeoutError, ValueError) as e:
+        log.warning("cannot read the comments of %s#%s: %s", repo, pr, str(e) or "timed out")
+        why = ("GitHub did not answer in time" if isinstance(e, TimeoutError)
+               else "GitHub refused or failed the request")
+        return dataclasses.replace(task, notes=(*task.notes, PR_CONTEXT_NOTE.format(why=why)))
+    return dataclasses.replace(task, pr_context=ctx)
 
 
 async def _clone(repo: str, dest: Path, env: dict[str, str], timeout: float, pr: int | None,
@@ -694,8 +828,10 @@ async def _clone(repo: str, dest: Path, env: dict[str, str], timeout: float, pr:
     # A commit base shows as its full SHA: a short one can turn ambiguous later.
     base_label = (f"origin/{base}" if base_ref.startswith("refs/remotes/") else
                   await _run(["git", "-C", str(dest), "rev-parse", base_ref], env, timeout))
+    notes: list[str] = []
+    guide = await clone_guide(dest, base_ref, env, min(
+        GUIDE_TIMEOUT_S, timeout - (time.monotonic() - start) - 2), notes)
     return ReviewTask(label=label, base_ref=base_label, base_sha=base_sha,
                       head_ref=head if pr is None else f"PR #{pr} ({head})",
                       head_sha=head_sha, instructions=instructions,
-                      guide=await clone_guide(dest, base_ref, env, min(
-                          GUIDE_TIMEOUT_S, timeout - (time.monotonic() - start) - 2)))
+                      guide=guide, notes=tuple(notes))

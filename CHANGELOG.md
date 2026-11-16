@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- Pull request context. A review of a pull request now gives the reviewers its title, description and the comments of people (bots are left out), marked as data, not instructions. The newest comments win when there are many. Setting: `review.pr_context` (on by default). A branch review is unchanged.
+- A note at the top of the result when `MANYEYES.md` or the pull request comments could not be read. Before, only the server log showed it. The note also appears in the GitHub comment.
+
 ## [1.4.0] — 2026-11-16
 
 ### Added
