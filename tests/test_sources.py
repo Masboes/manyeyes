@@ -697,3 +697,14 @@ async def test_missing_pr_author_trusts_nobody_by_name(monkeypatch):
                                      _c("", "2026-11-01", "blank", assoc="NONE")])
     ctx = await sources.pr_context("o/r", 1, "", {"title": "t", "body": ""})
     assert ctx.comments == () and ctx.author == "unknown"
+
+
+
+async def test_file_comments_and_ghost_authors(monkeypatch):
+    from manyeyes import sources
+    _fake_pr_api(monkeypatch,
+                 issue=[_c("ghost", "2026-11-01", "deleted someone", assoc="NONE")],
+                 inline=[_c("cy", "2026-11-02", "whole file", path="a.py", line=None,
+                            subject_type="file")])
+    ctx = await sources.pr_context("o/r", 1, "", {**PR_DATA, "user": {"login": "ghost"}})
+    assert [(c.author, c.where) for c in ctx.comments] == [("cy", "a.py (the whole file)")]

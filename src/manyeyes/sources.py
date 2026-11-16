@@ -551,7 +551,7 @@ PR_COMMENTS_MAX = 16_000    # characters of all comments; the newest stay
 PR_PAGES = 3                # pages of 100 per comment list
 PR_CONTEXT_TIMEOUT_S = 20.0
 PR_CONTEXT_NOTE = ("The pull request description and comments were not read: {why}. "
-                   "The reviewers saw only the code.")
+                   "The review ran without them.")
 
 
 def _clip(text: str, limit: int) -> str:
@@ -623,6 +623,8 @@ async def pr_context(repo: str, pr: int, token: str, data: dict) -> PRContext:
     """
     base = f"https://api.github.com/repos/{repo}"
     author = str((data.get("user") or {}).get("login") or "")
+    if author == "ghost":   # every deleted account shows as "ghost": match nobody by name
+        author = ""
     # A TaskGroup: when one list fails, the other requests stop too.
     async with asyncio.TaskGroup() as tg:
         t1 = tg.create_task(_github_list(f"{base}/issues/{pr}/comments", token))
@@ -637,7 +639,9 @@ async def pr_context(repo: str, pr: int, token: str, data: dict) -> PRContext:
     for c in inline:
         if (who := _trusted_person(c, author)) and (c.get("body") or "").strip():
             path, line = str(c.get("path") or ""), c.get("line")
-            if not line:
+            if c.get("subject_type") == "file":
+                where = f"{path} (the whole file)"
+            elif not line:
                 # Outdated: the line it was on is gone from the current diff.
                 where = f"{path} (on an older version of the change)"
             elif c.get("side") == "LEFT":
