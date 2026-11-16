@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import shutil
 import subprocess
 import time
@@ -501,3 +502,21 @@ async def test_failed_read_stops_the_lookup(repo, tmp_path):
     env = sources.git_auth_env("")
     env["PATH"] = f"{fake}:{env['PATH']}"
     assert await sources.clone_guide(repo, "main", env, 30) is None
+
+
+async def test_guide_budget_counts_the_pr_lookup(repo, tmp_path, monkeypatch):
+    from manyeyes import sources
+    remote = _bare_remote(repo, tmp_path, monkeypatch, "https://github.com/x/y.git")
+    git(remote, "update-ref", "refs/pull/1/head", _sha(repo, "feature"))
+
+    async def slow_resolve(*a):
+        await asyncio.sleep(2)
+        return "feature", "main"
+    seen = []
+
+    async def spy(dest, base_ref, env, timeout):
+        seen.append(timeout)
+    monkeypatch.setattr(sources, "resolve_pr", slow_resolve)
+    monkeypatch.setattr(sources, "clone_guide", spy)
+    await sources.clone_review("x/y", tmp_path / "clone", token="", timeout=10, pr=1)
+    assert seen and seen[0] <= 10 - 2 - 2

@@ -97,7 +97,10 @@ def _guide_text(path: str, raw: str) -> tuple[str, str] | None:
 
 def _guide_size(path: str, out: str) -> int:
     """The blob size from `git cat-file -s` output; refuse an oversized guide."""
-    size = int(out.split()[-1])
+    words = out.split()
+    if not words:
+        raise SourceError(f"git gave no size for {path}")
+    size = int(words[-1])
     if size > GUIDE_MAX_BYTES:
         raise SourceError(f"{path} is larger than {GUIDE_MAX_BYTES} bytes; not used")
     return size
@@ -106,8 +109,10 @@ def _guide_size(path: str, out: str) -> int:
 def local_guide(root: Path, base: str) -> tuple[str, str] | None:
     """The review standards at `base` in a local repository, or None.
 
-    Local objects only (GIT_NO_LAZY_FETCH): a partial clone that lacks the
-    file gives no standards rather than a fetch with the repository's config.
+    Local objects only (GIT_NO_LAZY_FETCH, git 2.44 and later): a partial
+    clone that lacks the file gives no standards. An older git may fetch the
+    blob with the user's own remote and credentials, as the diff prefetch in
+    local_review already does on purpose.
     An empty file falls through to the next path; a failed read stops.
     """
     env = {**os.environ, "GIT_NO_LAZY_FETCH": "1", "GIT_TERMINAL_PROMPT": "0"}
@@ -626,6 +631,7 @@ async def clone_review(repo: str, dest: Path, *, token: str, timeout: float,
     reviewers find everything a review needs locally: inside the jail git has
     no token and lazy fetching is switched off.
     """
+    start = time.monotonic()   # `timeout` is also the caller's budget for all of this
     if not REPO_RE.match(repo or ""):
         raise SourceError(f"repo must look like owner/name, got {repo!r}")
     if pr is not None:
@@ -641,15 +647,15 @@ async def clone_review(repo: str, dest: Path, *, token: str, timeout: float,
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
     try:
-        return await _clone(repo, dest, env, timeout, pr, head, base, instructions)
+        return await _clone(repo, dest, env, timeout, pr, head, base, instructions, start)
     except BaseException:
         shutil.rmtree(dest, ignore_errors=True)
         raise
 
 
 async def _clone(repo: str, dest: Path, env: dict[str, str], timeout: float, pr: int | None,
-                 head: str, base: str | None, instructions: str) -> ReviewTask:
-    start = time.monotonic()
+                 head: str, base: str | None, instructions: str,
+                 start: float) -> ReviewTask:
     url = f"https://github.com/{repo}.git"
     await _run(["git", "init", "-q", str(dest)], env, timeout)
     await _run(["git", "-C", str(dest), "remote", "add", "origin", url], env, timeout)
