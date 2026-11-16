@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import os
 import re
 import shutil
@@ -23,6 +24,8 @@ from pathlib import Path
 import httpx
 
 from .engine.task import ReviewTask
+
+log = logging.getLogger(__name__)
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
@@ -58,6 +61,77 @@ def _check_ref(ref: str) -> str:
 
 # A branch or base may also be a commit: 7 to 40 hex characters.
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+
+
+# --- the repository's review standards -------------------------------------
+
+# A repository can hold review standards for manyeyes, like a CLAUDE.md for
+# reviews. They come from the base branch, never from the change itself.
+GUIDE_PATHS = ("MANYEYES.md", ".github/MANYEYES.md")
+GUIDE_MAX = 20_000   # characters
+
+
+def _guide_blob(ls_tree: str) -> tuple[str, str] | None:
+    """(path, blob sha) of the first guide in `git ls-tree` output; files only."""
+    found: dict[str, str] = {}
+    for line in ls_tree.splitlines():
+        meta, _, path = line.partition("\t")
+        parts = meta.split()
+        if len(parts) == 3 and parts[0] in ("100644", "100755") and parts[1] == "blob":
+            found[path] = parts[2]
+    return next(((p, found[p]) for p in GUIDE_PATHS if p in found), None)
+
+
+def _guide_text(path: str, raw: bytes) -> tuple[str, str] | None:
+    text = raw.decode("utf-8", errors="replace").strip()
+    if not text:
+        return None
+    if len(text) > GUIDE_MAX:
+        text = text[:GUIDE_MAX] + f"\n[cut: {path} is longer than {GUIDE_MAX} characters]"
+    return path, text
+
+
+def local_guide(root: Path, base: str) -> tuple[str, str] | None:
+    """The review standards at `base` in a local repository, or None."""
+    try:
+        blob = _guide_blob(_git(root, "ls-tree", "--end-of-options", base, "--", *GUIDE_PATHS))
+        if not blob:
+            return None
+        raw = subprocess.run(["git", *SAFE_GIT, "-C", str(root), "cat-file", "blob", blob[1]],
+                             check=True, capture_output=True).stdout
+    except (SourceError, subprocess.CalledProcessError) as e:
+        log.warning("cannot read the review standards at %s: %s", base, e)
+        return None
+    return _guide_text(blob[0], raw)
+
+
+async def clone_guide(dest: Path, base_ref: str, env: dict[str, str],
+                      timeout: float) -> tuple[str, str] | None:
+    """The review standards at `base_ref` in a partial clone, or None.
+
+    The blob can be missing locally (a partial clone); git then fetches it.
+    Best effort: a review without the standards is better than no review.
+    """
+    try:
+        blob = _guide_blob(await _run(["git", "-C", str(dest), "ls-tree", base_ref, "--",
+                                       *GUIDE_PATHS], env, timeout))
+        if not blob:
+            return None
+        proc = await asyncio.create_subprocess_exec(
+            "git", "-C", str(dest), "cat-file", "blob", blob[1], env=env,
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
+        try:
+            raw, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except BaseException:
+            await _kill_group(proc)
+            raise
+        if proc.returncode != 0:
+            raise SourceError(f"git cat-file exited {proc.returncode}")
+    except (SourceError, TimeoutError) as e:
+        log.warning("cannot read the review standards at %s: %s", base_ref, e)
+        return None
+    return _guide_text(blob[0], raw)
 
 
 # --- local checkout -------------------------------------------------------
@@ -192,7 +266,8 @@ def local_review(path: Path, dest: Path, base: str | None = None,
     name = repo_name(root)
     return LocalSource(root, dest, ReviewTask(
         label=name, base_ref=base, base_sha=base_sha, head_ref=head_ref,
-        head_sha=head_sha, dirty=dirty, instructions=instructions), name)
+        head_sha=head_sha, dirty=dirty, instructions=instructions,
+        guide=local_guide(root, base)), name)
 
 
 # --- context repositories ---------------------------------------------------
@@ -592,4 +667,5 @@ async def _clone(repo: str, dest: Path, env: dict[str, str], timeout: float, pr:
                   await _run(["git", "-C", str(dest), "rev-parse", base_ref], env, timeout))
     return ReviewTask(label=label, base_ref=base_label, base_sha=base_sha,
                       head_ref=head if pr is None else f"PR #{pr} ({head})",
-                      head_sha=head_sha, instructions=instructions)
+                      head_sha=head_sha, instructions=instructions,
+                      guide=await clone_guide(dest, base_ref, env, timeout))
