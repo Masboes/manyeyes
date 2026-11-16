@@ -28,7 +28,8 @@ class PRContext:
         data: dict[str, object] = {"title": self.title, "author": self.author,
                                    "description": self.body}
         if self.left_out:
-            data["older_comments_left_out"] = self.left_out
+            # Includes skipped pages, where bots and strangers count too: an upper bound.
+            data["older_comments_not_shown_at_most"] = self.left_out
         data["comments_oldest_first"] = [
             {k: v for k, v in (("author", c.author), ("date", c.created_at[:10]),
                                ("review", c.state), ("on", c.where), ("text", c.text)) if v}

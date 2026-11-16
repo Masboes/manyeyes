@@ -22,6 +22,12 @@ def fmt_tokens(n: int | None) -> str:
 NOTE_PREFIX = "> **Note:** "
 
 
+def notes_of(result_md: str | None) -> list[str]:
+    """The notes in a rendered result's header (render_markdown puts them there)."""
+    top = (result_md or "").split("\n## Synthesis", 1)[0]
+    return [ln[len(NOTE_PREFIX):] for ln in top.splitlines() if ln.startswith(NOTE_PREFIX)]
+
+
 def header_lines(title: str, result: SwarmResult, notes: tuple[str, ...] = ()) -> list[str]:
     ok = len(result.successes)
     counts = ", ".join(f"{n} {k.replace('_', ' ')}" for k, n in

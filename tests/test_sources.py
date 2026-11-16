@@ -612,7 +612,7 @@ async def test_pr_context_keeps_the_newest_comments(monkeypatch):
     assert ctx.left_out > 0 and ctx.comments[-1].text.startswith("c29")
     assert len(ctx.comments) + ctx.left_out == 30
     assert sum(len(c.text) for c in ctx.comments) <= sources.PR_COMMENTS_MAX
-    assert "older_comments_left_out" in "\n".join(ctx.prompt_lines())
+    assert "older_comments_not_shown_at_most" in "\n".join(ctx.prompt_lines())
 
 
 async def test_clone_review_attaches_pr_context_or_a_note(repo, tmp_path, monkeypatch):
@@ -678,3 +678,22 @@ def test_pr_text_cannot_close_the_block():
     data = json.loads(block)
     assert data["description"] == evil and data["comments_oldest_first"][0]["text"] == evil
     assert "\n--- end pull request ---" not in block
+
+
+
+async def test_outdated_and_old_side_inline_comments_say_so(monkeypatch):
+    from manyeyes import sources
+    _fake_pr_api(monkeypatch, inline=[
+        _c("cy", "2026-11-01", "gone", path="a.py", line=None, original_line=7),
+        _c("cy", "2026-11-02", "removed line", path="a.py", line=3, side="LEFT")])
+    ctx = await sources.pr_context("o/r", 1, "", PR_DATA)
+    assert [c.where for c in ctx.comments] == ["a.py (on an older version of the change)",
+                                               "a.py:3 (the old, removed side)"]
+
+
+async def test_missing_pr_author_trusts_nobody_by_name(monkeypatch):
+    from manyeyes import sources
+    _fake_pr_api(monkeypatch, issue=[_c("unknown", "2026-11-01", "hi", assoc="NONE"),
+                                     _c("", "2026-11-01", "blank", assoc="NONE")])
+    ctx = await sources.pr_context("o/r", 1, "", {"title": "t", "body": ""})
+    assert ctx.comments == () and ctx.author == "unknown"

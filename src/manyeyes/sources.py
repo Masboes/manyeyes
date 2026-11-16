@@ -573,7 +573,7 @@ def _trusted_person(item: dict, pr_author: str) -> str | None:
     login = str(user.get("login") or "")
     if not login or user.get("type") == "Bot" or login.endswith("[bot]"):
         return None
-    if login == pr_author or item.get("author_association") in TRUSTED_ASSOCIATIONS:
+    if (pr_author and login == pr_author) or item.get("author_association") in TRUSTED_ASSOCIATIONS:
         return login
     return None
 
@@ -622,11 +622,13 @@ async def pr_context(repo: str, pr: int, token: str, data: dict) -> PRContext:
     stay independent.
     """
     base = f"https://api.github.com/repos/{repo}"
-    author = str((data.get("user") or {}).get("login") or "unknown")
-    (issue, s1), (inline, s2), (reviews, s3) = await asyncio.gather(
-        _github_list(f"{base}/issues/{pr}/comments", token),
-        _github_list(f"{base}/pulls/{pr}/comments", token),
-        _github_list(f"{base}/pulls/{pr}/reviews", token))
+    author = str((data.get("user") or {}).get("login") or "")
+    # A TaskGroup: when one list fails, the other requests stop too.
+    async with asyncio.TaskGroup() as tg:
+        t1 = tg.create_task(_github_list(f"{base}/issues/{pr}/comments", token))
+        t2 = tg.create_task(_github_list(f"{base}/pulls/{pr}/comments", token))
+        t3 = tg.create_task(_github_list(f"{base}/pulls/{pr}/reviews", token))
+    (issue, s1), (inline, s2), (reviews, s3) = t1.result(), t2.result(), t3.result()
     found: list[PRComment] = []
     for c in issue:
         if (who := _trusted_person(c, author)) and (c.get("body") or "").strip():
@@ -634,8 +636,14 @@ async def pr_context(repo: str, pr: int, token: str, data: dict) -> PRContext:
                                    _clip(c["body"], PR_COMMENT_MAX)))
     for c in inline:
         if (who := _trusted_person(c, author)) and (c.get("body") or "").strip():
-            line = c.get("line") or c.get("original_line")
-            where = f"{c.get('path', '')}:{line}" if line else str(c.get("path") or "")
+            path, line = str(c.get("path") or ""), c.get("line")
+            if not line:
+                # Outdated: the line it was on is gone from the current diff.
+                where = f"{path} (on an older version of the change)"
+            elif c.get("side") == "LEFT":
+                where = f"{path}:{line} (the old, removed side)"
+            else:
+                where = f"{path}:{line}"
             found.append(PRComment(who, c.get("created_at") or "",
                                    _clip(c["body"], PR_COMMENT_MAX), where=where))
     for rv in reviews:
@@ -654,7 +662,7 @@ async def pr_context(repo: str, pr: int, token: str, data: dict) -> PRContext:
             break
         kept.append(c)
     kept.reverse()
-    return PRContext(title=_clip(data.get("title") or "", 300), author=author,
+    return PRContext(title=_clip(data.get("title") or "", 300), author=author or "unknown",
                      body=_clip(data.get("body") or "", PR_BODY_MAX),
                      comments=tuple(kept), left_out=len(found) - len(kept) + s1 + s2 + s3)
 

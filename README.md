@@ -136,7 +136,7 @@ manyeyes reads the file from the base branch, never from the change under review
 
 ### The pull request's own words
 
-When you review a pull request (not a branch), the reviewers also get its title, description and comments. They use them to learn what the change claims to do, and they check those claims against the code. Comments from bots are left out, so an earlier review cannot steer a new one. Only comments from the pull request's author and from the repository's owners, members and collaborators count; a stranger's comment never reaches a reviewer. The text is marked as data, not as instructions. Like the code, this text goes to the reviewer providers (OpenAI, Anthropic) and can appear in quotes in the result. Turn it off with `review.pr_context = false`.
+When you review a pull request (not a branch), the reviewers also get its title, description and comments. They use them to learn what the change claims to do, and they check those claims against the code. Comments from bots are left out, so an earlier review cannot steer a new one. Only comments from the pull request's author (also an outside contributor) and from the repository's owners, members and collaborators count; other people's comments never reach a reviewer. The description is always included, also when a bot such as Dependabot wrote the pull request. The text is marked as data, not as instructions. Like the code, this text goes to the reviewer providers (OpenAI, Anthropic) and can appear in quotes in the result. Turn it off with `review.pr_context = false`.
 
 If manyeyes cannot read `MANYEYES.md` or the pull request comments, the review still runs, and the result starts with a note that says so.
 

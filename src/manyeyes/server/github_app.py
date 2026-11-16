@@ -26,7 +26,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from ..engine.bundle import NOTE_PREFIX
+from ..engine.bundle import NOTE_PREFIX, notes_of
 from ..sources import TRUSTED_ASSOCIATIONS
 
 if TYPE_CHECKING:
@@ -172,8 +172,7 @@ def result_comment(job: dict[str, Any], job_url: str | None) -> str:
     status = job.get("status")
     synthesis = job.get("synthesis_md") or ""
     # The notes are fixed texts from manyeyes itself (see sources.py).
-    top = (job.get("result_md") or "").split("\n## Synthesis", 1)[0]
-    notes = "\n\n".join(ln for ln in top.splitlines() if ln.startswith(NOTE_PREFIX))
+    notes = "\n\n".join(NOTE_PREFIX + n for n in notes_of(job.get("result_md")))
     if status == "done" and synthesis:
         sha = (job.get("head_sha") or "")[:7]
         head = f"{who} manyeyes reviewed commit {sha}.".strip() if sha else \

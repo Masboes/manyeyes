@@ -63,6 +63,7 @@ def test_spar_runs_end_to_end(client):
     assert job["status"] == "done" and job["outcomes"] == {"success": 2}
     assert [x["outcome"] for x in job["runs"]] == ["success", "success"]
     assert job["runs"][0]["input_tokens"] == 1000
+    assert job["notes"] == []
     run_id = job["runs"][0]["id"]
     assert "Looks fine" in client.get(f"/api/jobs/{job['id']}/runs/{run_id}", headers=H).text
     types = [e["type"] for e in client.get(f"/api/jobs/{job['id']}/events", headers=H).json()]
@@ -424,3 +425,10 @@ def test_usage_route(client, server_settings, monkeypatch):
         assert "history" not in u
         h = c.get("/api/usage?history=true", headers=H).json()["history"]
         assert [r["used_percent"] for r in h] == [9, 40, 45]   # oldest first
+
+
+
+def test_job_api_lists_the_notes():
+    from manyeyes.engine.bundle import NOTE_PREFIX, notes_of
+    md = f"# R\n\n**Reviews:** 1 of 1\n\n{NOTE_PREFIX}A note.\n\n## Synthesis\n\n{NOTE_PREFIX}not one\n"
+    assert notes_of(md) == ["A note."] and notes_of(None) == []

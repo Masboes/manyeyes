@@ -849,6 +849,9 @@ function viewJob(main, id) {
     else if (j.options?.no_synth) body = h("p", { class: "notice" }, "The synthesis was skipped for this job. Read the separate reviews below.");
     else if (s && s.outcome !== "success") body = h("p", { class: "notice" }, `No synthesis: ${s.failure_detail || s.outcome}. Read the separate reviews below.`);
     else body = h("p", { class: "notice" }, "This job has no synthesis.");
+    // Fixed notes from manyeyes, e.g. "MANYEYES.md was not used". Text only.
+    const notes = (j.notes || []).map((n) => h("p", { class: "notice", role: "note" }, n));
+    if (notes.length) body = h("div", null, ...notes, body);
     return block("Synthesis", body, { note, id: "synthesis" });
   }
 
