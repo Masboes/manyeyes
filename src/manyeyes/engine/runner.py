@@ -59,6 +59,15 @@ THROTTLE_RE = re.compile(r"try again in \d+(\.\d+)? ?(ms|s|sec|seconds?)\b|per m
                          r"requests per|tokens per min", re.IGNORECASE)
 
 
+def quorum_of(fraction: float, n: int) -> int:
+    """Successes that start the straggler grace: ceil(fraction x n). With a
+    fraction below 1 and three or more reviewers, at most n - 1, so a small
+    roster (quick mode: 3) still gets the grace instead of waiting for a hung
+    reviewer's hard timeout."""
+    q = max(1, math.ceil(fraction * n))
+    return min(q, n - 1) if fraction < 1 and n >= 3 else q
+
+
 def plan_limit(text: str) -> bool:
     """A used-up plan, not a passing throttle."""
     return bool(PLAN_LIMIT_RE.search(text or "")) and not THROTTLE_RE.search(text or "")
@@ -424,7 +433,7 @@ class Runner:
         reviewers = [ADAPTERS[s.kind](s, self.s, self.run_dir) for s in specs]
         self._procs = {s.name: _Proc() for s in specs}
         n = len(specs)
-        quorum = max(1, math.ceil(float(self.s["limits.quorum_fraction"]) * n))
+        quorum = quorum_of(float(self.s["limits.quorum_fraction"]), n)
         grace = float(self.s["limits.straggler_grace_s"])
         spare_until: float | None = None
         if deadline is not None:

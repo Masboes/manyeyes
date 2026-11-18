@@ -5,7 +5,21 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Changed
-- Codex model `gpt-6.2-sol` (was `gpt-6.1-sol`), and fewer Codex reviewers: full `codex:4,claude:2` (was `codex:8,claude:2`), quick `codex:2,claude:1` (was `codex:4,claude:1`). Deep stays `codex:8,claude:3`. In a blind test on 6 real PRs, 10 × `gpt-6.2-sol` found 34 real issues (11 high or medium) against 6 (4) for 10 × `gpt-6.1-sol`; two 6.1 runs a week apart gave the same 6. The new full roster finds about 60% more high and medium issues than the old one, for about the same Codex quota (estimated from tokens), and its synthesis kept 49 real issues against 31. A `gpt-6.2-sol` reviewer takes about twice as long, so a full review now takes about 4–5 minutes instead of about 3; a deep review of a large PR can take 15. Claude reviewers still find other, mostly low, issues, at no extra time. The synthesis stays `gpt-6.1-sol`: `gpt-6.2-sol` scored the same there. A server with its own `roster` or model settings keeps them. If a Codex plan cannot use `gpt-6.2-sol`, set `reviewers.codex.model` to `gpt-6.1-sol`.
+- New defaults:
+  - Codex model `gpt-6.2-sol` (was `gpt-6.1-sol`).
+  - Full roster `codex:4,claude:2` (was `codex:8,claude:2`).
+  - Quick roster `codex:2,claude:1` (was `codex:4,claude:1`).
+  - Deep roster `codex:8,claude:3` and synthesis model `gpt-6.1-sol` do not change.
+  - Codex-only rosters in the docs: `codex:6`, quick `codex:3`, deep `codex:10`.
+- Why, from a blind test on 6 real PRs against the code:
+  - 10 × `gpt-6.2-sol` found 34 real issues (11 high or medium). 10 × `gpt-6.1-sol` found 6 (4), in two runs a week apart.
+  - From those reviews, the new full roster finds about 60% more high and medium issues than the old one, for about the same Codex quota (estimated from tokens).
+  - From the same reviews, the synthesis of the new full roster kept 49 real issues, against 31 for the old roster.
+  - Claude reviewers still find other issues, mostly low ones, and finish before `gpt-6.2-sol`.
+  - As the synthesis model, `gpt-6.2-sol` scored the same as `gpt-6.1-sol`.
+- A `gpt-6.2-sol` reviewer takes about twice as long. A full review takes about 4–5 minutes instead of about 3. A deep review of a large PR can take 15.
+- A server with its own `roster` or model settings keeps them. If a Codex plan cannot use `gpt-6.2-sol`, set `reviewers.codex.model` to `gpt-6.1-sol`.
+- Straggler rule: with 3 or more reviewers, quorum is at most all but one. Before, a 3- or 4-reviewer run needed every reviewer to succeed, so one hung reviewer held the run until its hard timeout.
 
 ## [1.5.0] — 2026-11-16
 

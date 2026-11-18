@@ -24,7 +24,7 @@ The logins live in `~/.manyeyes/auth/codex` and `~/.manyeyes/auth/claude`. The c
 No Claude login? Then use Codex-only rosters, or every review reports the Claude reviewers as failed:
 
 ```bash
-export MANYEYES_ROSTER=codex:10 MANYEYES_ROSTER_QUICK=codex:5 MANYEYES_ROSTER_DEEP=codex:10
+export MANYEYES_ROSTER=codex:6 MANYEYES_ROSTER_QUICK=codex:3 MANYEYES_ROSTER_DEEP=codex:10
 ```
 
 ## 3. Optional: the synthesis

@@ -9,10 +9,10 @@ Secrets (keys whose environment name allows `_FILE`) never come from the config 
 Example `config.toml`:
 
 ```toml
-roster = "codex:8,claude:2"
+roster = "codex:6"
 
 [reviewers.codex]
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 effort = "medium"
 
 [limits]

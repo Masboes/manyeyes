@@ -4,7 +4,7 @@
 
 **manyeyes runs a swarm of independent AI code reviewers on your change, then merges their findings into one list, ranked by how many reviewers found each problem.**
 
-Ten reviewers that each read the code alone find more than one reviewer that reads it ten times. Where several of them flag the same line on their own, the finding is usually real. manyeyes runs Codex reviewers by default (Claude is optional), each one in its own sandbox, and gives you the merged synthesis in minutes.
+Several reviewers that each read the code alone find more than one reviewer that reads it several times. Where several of them flag the same line on their own, the finding is usually real. manyeyes runs Codex and Claude reviewers by default (Claude is optional), each one in its own sandbox, and gives you the merged synthesis in minutes.
 
 ![The manyeyes web UI: a finished review with the synthesis first](docs/images/job.png)
 
@@ -41,7 +41,7 @@ manyeyes login claude           # optional: type /login, pick your Claude accoun
 
 The logins live in `~/.manyeyes/auth/`. Every run mounts that folder, so you log in once on your machine. Codex uses your ChatGPT login only, never an API key. A server can hold more than one login per provider (`manyeyes login codex --name second`); reviewers then move to another login when one hits its limit. See [More than one login](docs/self-hosting.md#more-than-one-login-per-provider).
 
-The default rosters include Claude. Without a Claude login, use Codex only: `export MANYEYES_ROSTER=codex:10 MANYEYES_ROSTER_QUICK=codex:5 MANYEYES_ROSTER_DEEP=codex:10` (a server sets the rosters in Settings).
+The default rosters include Claude. Without a Claude login, use Codex only: `export MANYEYES_ROSTER=codex:6 MANYEYES_ROSTER_QUICK=codex:3 MANYEYES_ROSTER_DEEP=codex:10` (a server sets the rosters in Settings).
 
 For the synthesis step, add an OpenAI API key (optional; without it you get every review, but no merged list):
 

@@ -35,7 +35,7 @@ manyeyes login codex     # device login: open the URL it prints, sign in with Ch
 manyeyes login claude    # optional: type /login, pick the Claude account, finish in the browser, then /exit
 ```
 
-Codex is required. Claude is optional, but the default rosters include it: without a Claude login, add `export MANYEYES_ROSTER=codex:10 MANYEYES_ROSTER_QUICK=codex:5 MANYEYES_ROSTER_DEEP=codex:10` to the person's shell profile. The logins are stored in `~/.manyeyes/auth/` and reused by every run.
+Codex is required. Claude is optional, but the default rosters include it: without a Claude login, add `export MANYEYES_ROSTER=codex:6 MANYEYES_ROSTER_QUICK=codex:3 MANYEYES_ROSTER_DEEP=codex:10` to the person's shell profile. The logins are stored in `~/.manyeyes/auth/` and reused by every run.
 
 ## 4. The synthesis key (optional)
 
