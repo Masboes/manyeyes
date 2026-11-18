@@ -6,7 +6,8 @@ stderr until exit or until a deadline, classify, report.
 Straggler policy: only successful reviews count toward quorum
 (ceil(quorum_fraction x N), at most N - 1 for N >= 3: see quorum_of).
 Once quorum is reached, the reviewers still running get `straggler_grace_s`,
-then they are killed. Failures never arm the timer, so a burst of fast failures cannot cut short the reviewers that work.
+then they are killed. Failures never arm the timer, so a burst of fast
+failures cannot cut short the reviewers that work.
 
 The kill is family-aware (a family is a reviewer kind: codex, claude). When
 the grace runs out, a reviewer whose family has no successful review yet is
