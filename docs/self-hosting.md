@@ -167,7 +167,7 @@ For a server shared by a team that should not be able to use up each other's quo
   |---|---|
   | `limits.user_jobs_per_hour` | reviews and spars per person per hour |
   | `limits.user_jobs_per_day` | reviews and spars per person per day |
-  | `limits.user_deep_jobs_per_day` | deep reviews per person per day (they cost about 5× the tokens) |
+  | `limits.user_deep_jobs_per_day` | deep reviews per person per day (they cost about 10× the tokens) |
   | `limits.user_reviewer_runs_per_day` | reviewer runs per person per day, summed over rosters — the fairest token cap |
   | `limits.user_concurrent_jobs` | jobs per person running at once; others' jobs go first |
 
@@ -209,7 +209,7 @@ A restart ends running jobs (they are marked failed with "server restarted"); qu
 - Health: `GET /healthz`.
 - Logs: the container's stdout.
 - Restart: running jobs become `failed` with "server restarted"; queued jobs run.
-- Review defaults (roster, models, limits): change them on the Settings page. A change applies to the next job. The default rosters include Claude: without a Claude login, set Codex-only rosters there (for example `codex:10`, quick `codex:5`).
+- Review defaults (roster, models, limits): change them on the Settings page. A change applies to the next job. The default rosters include Claude: without a Claude login, set Codex-only rosters there (for example `codex:6`, quick `codex:3`, deep `codex:10`).
 - Plan usage: the Stats page shows how much of the Codex and Claude plans the reviewer logins have used, and when each window resets. The server reads it every 30 minutes (`usage.interval_min`, 0 turns it off). Reading spends no tokens: Codex answers from its app server, and Claude's `/usage` is a local command. The numbers cover all use of those logins, not only manyeyes.
 - Retention: set `MANYEYES_RETENTION_DAYS` to delete old jobs. Telemetry stays unless `MANYEYES_RETENTION_KEEP_TELEMETRY=false`.
 - Remove a person: delete the line from `allowlist.txt` (takes effect on their next request), then `manyeyes users forget <login>` to erase their jobs and tokens.

@@ -4,7 +4,7 @@
 
 **manyeyes runs a swarm of independent AI code reviewers on your change, then merges their findings into one list, ranked by how many reviewers found each problem.**
 
-Ten reviewers that each read the code alone find more than one reviewer that reads it ten times. Where several of them flag the same line on their own, the finding is usually real. manyeyes runs Codex reviewers by default (Claude is optional), each one in its own sandbox, and gives you the merged synthesis in minutes.
+Several reviewers that each read the code alone find more than one reviewer that reads it several times. Where several of them flag the same line on their own, the finding is usually real. manyeyes runs Codex and Claude reviewers by default (Claude is optional), each one in its own sandbox, and gives you the merged synthesis in minutes.
 
 ![The manyeyes web UI: a finished review with the synthesis first](docs/images/job.png)
 
@@ -41,7 +41,7 @@ manyeyes login claude           # optional: type /login, pick your Claude accoun
 
 The logins live in `~/.manyeyes/auth/`. Every run mounts that folder, so you log in once on your machine. Codex uses your ChatGPT login only, never an API key. A server can hold more than one login per provider (`manyeyes login codex --name second`); reviewers then move to another login when one hits its limit. See [More than one login](docs/self-hosting.md#more-than-one-login-per-provider).
 
-The default rosters include Claude. Without a Claude login, use Codex only: `export MANYEYES_ROSTER=codex:10 MANYEYES_ROSTER_QUICK=codex:5 MANYEYES_ROSTER_DEEP=codex:10` (a server sets the rosters in Settings).
+The default rosters include Claude. Without a Claude login, use Codex only: `export MANYEYES_ROSTER=codex:6 MANYEYES_ROSTER_QUICK=codex:3 MANYEYES_ROSTER_DEEP=codex:10` (a server sets the rosters in Settings).
 
 For the synthesis step, add an OpenAI API key (optional; without it you get every review, but no merged list):
 
@@ -63,8 +63,8 @@ manyeyes doctor --probe
 cd your-repo
 manyeyes review                                  # this branch against origin/HEAD (or main)
 manyeyes review --base develop                   # against another base
-manyeyes review --roster codex:4                 # fewer reviewers: faster, cheaper
-manyeyes review --roster codex:8,claude:2        # mix in Claude
+manyeyes review --roster codex:2                 # fewer reviewers: cheaper
+manyeyes review --roster codex:8,claude:2        # more reviewers
 manyeyes review --focus "check the migration for data loss"
 manyeyes review --repo owner/name --pr 123       # clone and review a GitHub pull request
 ```
@@ -81,7 +81,7 @@ Progress goes to stderr, the synthesis to stdout:
 ```
 $ manyeyes review --roster codex:3,claude:1
 manyeyes: job r-d0daffaa: your-repo — 4 reviewers (codex:3,claude:1)
-manyeyes: 4 reviewers started; quorum 4
+manyeyes: 4 reviewers started; quorum 3
 manyeyes: [1/4] codex#2    ok               2m27s
 manyeyes: [2/4] codex#3    ok               2m27s
 manyeyes: [3/4] codex#1    ok               2m55s
@@ -109,8 +109,8 @@ manyeyes: full result: /home/you/.manyeyes/results/r-d0daffaa.md
 | `--json` | Print the result as JSON: status, outcome counts, synthesis, every review with its tokens and timing |
 | `--no-synth` | Skip the synthesis |
 | `--roster` | Reviewers for this run, for example `codex:10` or `codex:8,claude:2` |
-| `--quick` | Quick mode: fewer reviewers, about a minute — while you iterate |
-| `--deep` | Deep mode: thorough prompt, 3–5 minutes, about 5× the tokens — for risky changes |
+| `--quick` | Quick mode: fewer reviewers, about 3–4 minutes — while you iterate |
+| `--deep` | Deep mode: thorough prompt, 5–15 minutes, about 10× the tokens — for risky changes |
 | `--context owner/name` | A related repo the reviewers get read-only, to catch breakage across repos (repeat, at most 5) |
 | `manyeyes jobs` | List past runs; `manyeyes jobs show <id>` prints one again |
 | `manyeyes usage` | How much of the Codex and Claude plans is used, and when each window resets (spends no tokens) |
@@ -171,7 +171,7 @@ claude mcp add --transport http manyeyes https://your-host/manyeyes/mcp
 
 The agent then sees `swarm_review`, `swarm_spar`, `swarm_get`, `swarm_ls` and a few more. `swarm_review` blocks until the review is done and returns the synthesis, so the agent can act on it in the same turn. For a change that other repositories depend on, pass `context_repos` (for example `["acme/web", "acme/events@main"]`): the reviewers get those repos read-only and check whether the change breaks a caller, a shared contract or an event shape there. The server keeps a cached clone of each, so after the first use a context repo adds seconds, not minutes.
 
-Three modes: `"full"` (default, the normal review, 1–2 minutes), `"quick"` (fewer reviewers, about a minute, while iterating) and `"deep"` (a thorough prompt that reads every changed file and traces dependencies, 3–5 minutes and about 5× the tokens — for risky changes only).
+Three modes: `"full"` (default, the normal review, 4–5 minutes), `"quick"` (fewer reviewers, 3–4 minutes, while iterating) and `"deep"` (a thorough prompt that reads every changed file and traces dependencies, 5–15 minutes and about 10× the tokens — for risky changes only).
 
 Self-hosting takes a data directory, a GitHub OAuth App and one container: see the [self-hosting guide](docs/self-hosting.md).
 
@@ -183,13 +183,13 @@ Self-hosting takes a data directory, a GitHub OAuth App and one container: see t
 
 | Setting | Default |
 |---|---|
-| Reviewers, full mode (default) | `codex:8,claude:2`, standard prompt — about 1–2 minutes |
-| Reviewers, quick mode | `codex:4,claude:1`, standard prompt — about a minute |
-| Reviewers, deep mode | `codex:8,claude:3`, thorough prompt — 3–5 minutes, about 5× the tokens |
-| Codex model, effort | `gpt-6.1-sol`, `medium` |
+| Reviewers, full mode (default) | `codex:4,claude:2`, standard prompt — about 4–5 minutes |
+| Reviewers, quick mode | `codex:2,claude:1`, standard prompt — about 3–4 minutes |
+| Reviewers, deep mode | `codex:8,claude:3`, thorough prompt — 5–15 minutes, about 10× the tokens |
+| Codex model, effort | `gpt-6.2-sol`, `medium` |
 | Claude model, effort | `sonnet` (Claude Code's newest Sonnet), `high` |
-| Per-reviewer time limit | 10 minutes |
-| Straggler rule | when 80 % of reviewers have succeeded, the rest get 2 more minutes |
+| Per-reviewer time limit | 10 minutes (20 in deep mode) |
+| Straggler rule | when 80 % of reviewers have succeeded (at most all but one), the rest get 2 more minutes; a provider without a finished review yet is not cut off |
 | Synthesis model | `gpt-6.1-sol` |
 
 Change any of them per run (`--roster`, `--set key=value`), in `~/.manyeyes/config.toml`, with environment variables, or — on a server — on the Settings page. See the [configuration reference](docs/configuration.md).

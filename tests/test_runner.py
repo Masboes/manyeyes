@@ -22,7 +22,8 @@ async def run(settings, roster: str, workdir: Path, **layer):
 
 
 async def test_all_succeed(settings, tmp_path):
-    res = await run(settings, "codex:3@ok", tmp_path)
+    # Fraction 1: all three must finish; the 1 s test grace could kill a slow third.
+    res = await run(settings, "codex:3@ok", tmp_path, **{"limits.quorum_fraction": 1.0})
     assert [r.outcome for r in res.runs] == [Outcome.SUCCESS] * 3
     assert res.status == "done" and not res.partial
     u = res.runs[0].usage
@@ -40,6 +41,19 @@ async def test_straggler_killed_after_quorum(settings, tmp_path):
     assert outcomes[-1] == Outcome.STRAGGLER_KILLED
     assert res.runs[-1].duration_s < 10
     assert res.status == "done" and res.partial
+
+
+def test_quorum_leaves_room_for_a_straggler():
+    from manyeyes.engine.runner import quorum_of
+    assert [quorum_of(0.8, n) for n in (1, 2, 3, 4, 5, 6, 10)] == [1, 2, 2, 3, 4, 5, 8]
+    assert quorum_of(1.0, 3) == 3 and quorum_of(0.5, 3) == 2
+
+
+async def test_small_roster_kills_its_straggler(settings, tmp_path):
+    # 3 reviewers: quorum 2 (not ceil(2.4) = 3), so the hung one gets the grace.
+    res = await run(settings, "codex:2@ok,codex:1@hang", tmp_path)
+    assert res.runs[-1].outcome == Outcome.STRAGGLER_KILLED
+    assert res.runs[-1].duration_s < 10
 
 
 @pytest.fixture

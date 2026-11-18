@@ -32,8 +32,8 @@ INSTRUCTIONS = (
     "independent reviewers work the same problem in parallel, then a synthesis step groups "
     "the findings by how many reviewers (and, with a mixed roster, how many provider "
     "families) agreed — that agreement is the signal worth weighting. BOTH TOOLS BLOCK "
-    "until the run finishes and hand back the synthesis directly: a small spar takes under "
-    "a minute, a review takes minutes (typically 5-15, and no reviewer may run beyond 20). "
+    "until the run finishes and hand back the synthesis directly: a small spar takes a "
+    "minute or two, a review takes minutes (typically 4-15; no reviewer runs beyond 20). "
     "Call them when you have a real question and can afford the wait, not twice on the same "
     "diff. Afterwards: swarm_ls to find past runs, swarm_get to re-read one, swarm_logs to "
     "debug a failure, swarm_stats for timings."
@@ -229,9 +229,9 @@ def create_mcp(settings: Settings, store: Store, worker: Worker, auth: Auth) -> 
         """Review a GitHub PR or branch with a swarm of independent reviewers and return the
         synthesis, which groups findings by how many reviewers agreed.
 
-        THIS CALL BLOCKS until the review is finished: minutes, typically 5-15; no reviewer
-        may run beyond 20. Budget for the wait, do not call it for a trivial question, and do
-        not call it twice on the same diff.
+        THIS CALL BLOCKS until the review is finished: minutes, typically 4-15
+        (deep mode up to about 20). Budget for the wait, do not call it for a trivial
+        question, and do not call it twice on the same diff.
 
         `repo` is owner/name. Give EITHER `pr` (a PR number) OR `branch` (head) with an
         optional `base` (default: the repository's default branch). `branch` and `base` may
@@ -241,10 +241,10 @@ def create_mcp(settings: Settings, store: Store, worker: Worker, auth: Auth) -> 
 
         `mode` — how much of the swarm to use:
         - "full" (default, the normal choice): Codex and Claude reviewers with the standard
-          prompt, about 1-2 minutes. Use it for an ordinary review before merging.
-        - "quick": a few reviewers, about a minute. Use it while iterating; it finds fewer issues.
+          prompt, about 4-5 minutes. Use it for an ordinary review before merging.
+        - "quick": a few reviewers, about 3-4 minutes. Use it while iterating; it finds fewer issues.
         - "deep": thorough prompt — reviewers read every changed file in full and trace
-          callers and dependencies. About 3-5 minutes and roughly 5x the tokens of a full run,
+          callers and dependencies. About 5-15 minutes and roughly 10x the tokens of a full run,
           so it is EXPENSIVE: use it only for risky changes (concurrency, auth, data
           migrations, timeouts, behaviour that depends on third-party libraries), not by default.
 
@@ -282,7 +282,7 @@ def create_mcp(settings: Settings, store: Store, worker: Worker, auth: Auth) -> 
         which merges and contrasts their answers. Use for design debates and second opinions.
 
         THIS CALL BLOCKS until every reviewer has answered. A short question with a small
-        roster ("codex:3") comes back in under a minute. `mode` works as in swarm_review:
+        roster ("codex:3") comes back in a minute or two. `mode` works as in swarm_review:
         "full" (default), "quick", or "deep" (expensive; rarely needed for a question).
 
         Returns {id, status, waited_seconds, synthesis}."""

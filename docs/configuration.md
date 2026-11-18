@@ -9,10 +9,10 @@ Secrets (keys whose environment name allows `_FILE`) never come from the config 
 Example `config.toml`:
 
 ```toml
-roster = "codex:8,claude:2"
+roster = "codex:6"
 
 [reviewers.codex]
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 effort = "medium"
 
 [limits]
@@ -27,12 +27,12 @@ straggler_grace_s = 90
 |---|---|---|---|---|
 | `data_dir` | `MANYEYES_DATA_DIR` | `~/.manyeyes` |  | Database, runs, secrets file and auth homes. Keep it outside /tmp: Codex refuses to run its sandbox from there. |
 | `auth_dir` | `MANYEYES_AUTH_DIR` | — |  | Reviewer login homes (`codex/`, `claude/`, and `codex@<name>/`, `claude@<name>/` for more logins). Default `<data_dir>/auth`. |
-| `roster` | `MANYEYES_ROSTER` | `codex:8,claude:2` | yes | Reviewers for a full run (the default mode). |
-| `roster_quick` | `MANYEYES_ROSTER_QUICK` | `codex:4,claude:1` | yes | Reviewers for a quick run (`mode=quick`, `--quick`): fewer and faster, for iterating. |
+| `roster` | `MANYEYES_ROSTER` | `codex:4,claude:2` | yes | Reviewers for a full run (the default mode). |
+| `roster_quick` | `MANYEYES_ROSTER_QUICK` | `codex:2,claude:1` | yes | Reviewers for a quick run (`mode=quick`, `--quick`): fewer and faster, for iterating. |
 | `roster_deep` | `MANYEYES_ROSTER_DEEP` | `codex:8,claude:3` | yes | Reviewers for a deep run (`mode=deep`, `--deep`); deep runs always use the thorough prompt. |
-| `review.depth` | `MANYEYES_REVIEW_DEPTH` | `standard` | yes | Prompt for full runs: `standard` or `thorough` (reads every changed file in full, traces callers and dependencies; about 3x slower and 5x the tokens). Quick runs are always standard, deep runs always thorough. One of: standard, thorough. |
+| `review.depth` | `MANYEYES_REVIEW_DEPTH` | `standard` | yes | Prompt for full runs: `standard` or `thorough` (reads every changed file in full, traces callers and dependencies; about 4x slower and 5x the tokens). Quick runs are always standard, deep runs always thorough. One of: standard, thorough. |
 | `review.pr_context` | `MANYEYES_REVIEW_PR_CONTEXT` | `True` | yes | For a pull request, give the reviewers its title, description and human comments (bots left out), marked as data, not instructions. |
-| `reviewers.codex.model` | `MANYEYES_REVIEWERS_CODEX_MODEL` | `gpt-6.1-sol` | yes | Codex model. |
+| `reviewers.codex.model` | `MANYEYES_REVIEWERS_CODEX_MODEL` | `gpt-6.2-sol` | yes | Codex model. |
 | `reviewers.codex.effort` | `MANYEYES_REVIEWERS_CODEX_EFFORT` | `medium` | yes | Codex reasoning effort. One of: minimal, low, medium, high, xhigh. |
 | `reviewers.codex.sandbox` | `MANYEYES_REVIEWERS_CODEX_SANDBOX` | `read-only` |  | Codex's own sandbox inside the jail: `read-only` or `danger-full-access`. One of: read-only, danger-full-access. |
 | `reviewers.codex.bin` | `MANYEYES_REVIEWERS_CODEX_BIN` | `codex` |  | Codex CLI command. |
@@ -41,7 +41,7 @@ straggler_grace_s = 90
 | `reviewers.claude.bin` | `MANYEYES_REVIEWERS_CLAUDE_BIN` | `claude` |  | Claude Code CLI command. |
 | `limits.reviewer_timeout_s` | `MANYEYES_LIMITS_REVIEWER_TIMEOUT_S` | `600` | yes | Hard limit per reviewer, seconds. |
 | `limits.login_rest_s` | `MANYEYES_LIMITS_LOGIN_REST_S` | `1800` | yes | How long a reviewer login rests after a rate limit, in seconds, when no usage reading tells when its plan window resets. |
-| `limits.quorum_fraction` | `MANYEYES_LIMITS_QUORUM_FRACTION` | `0.8` | yes | Share of reviewers that must succeed before the straggler grace starts. |
+| `limits.quorum_fraction` | `MANYEYES_LIMITS_QUORUM_FRACTION` | `0.8` | yes | Share of reviewers that must succeed before the straggler grace starts. Below 1, with 3 or more reviewers, at most all but one. |
 | `limits.straggler_grace_s` | `MANYEYES_LIMITS_STRAGGLER_GRACE_S` | `120` | yes | Seconds the remaining reviewers get after quorum. |
 | `limits.clone_timeout_s` | `MANYEYES_LIMITS_CLONE_TIMEOUT_S` | `300` |  | Limit for cloning a repository, seconds. |
 | `limits.synth_timeout_s` | `MANYEYES_LIMITS_SYNTH_TIMEOUT_S` | `300` |  | Limit for the synthesis call, seconds. |

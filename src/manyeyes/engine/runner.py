@@ -4,9 +4,10 @@ Lifecycle per reviewer: wait for a slot, start (in the jail), read stdout and
 stderr until exit or until a deadline, classify, report.
 
 Straggler policy: only successful reviews count toward quorum
-(ceil(quorum_fraction x N)). Once quorum is reached, the reviewers still
-running get `straggler_grace_s`, then they are killed. Failures never arm the
-timer, so a burst of fast failures cannot cut short the reviewers that work.
+(ceil(quorum_fraction x N), at most N - 1 for N >= 3: see quorum_of).
+Once quorum is reached, the reviewers still running get `straggler_grace_s`,
+then they are killed. Failures never arm the timer, so a burst of fast
+failures cannot cut short the reviewers that work.
 
 The kill is family-aware (a family is a reviewer kind: codex, claude). When
 the grace runs out, a reviewer whose family has no successful review yet is
@@ -57,6 +58,15 @@ PLAN_LIMIT_RE = re.compile(r"usage limit|quota|(5-hour|weekly|daily|session|opus
                            r"out of (credits|messages)", re.IGNORECASE)
 THROTTLE_RE = re.compile(r"try again in \d+(\.\d+)? ?(ms|s|sec|seconds?)\b|per minute|"
                          r"requests per|tokens per min", re.IGNORECASE)
+
+
+def quorum_of(fraction: float, n: int) -> int:
+    """Successes that start the straggler grace: ceil(fraction x n). With a
+    fraction below 1 and three or more reviewers, at most n - 1, so a small
+    roster (quick mode: 3) still gets the grace. A reviewer whose family has no
+    success yet is still spared (see the module docstring)."""
+    q = max(1, math.ceil(fraction * n))
+    return min(q, n - 1) if fraction < 1 and n >= 3 else q
 
 
 def plan_limit(text: str) -> bool:
@@ -424,7 +434,7 @@ class Runner:
         reviewers = [ADAPTERS[s.kind](s, self.s, self.run_dir) for s in specs]
         self._procs = {s.name: _Proc() for s in specs}
         n = len(specs)
-        quorum = max(1, math.ceil(float(self.s["limits.quorum_fraction"]) * n))
+        quorum = quorum_of(float(self.s["limits.quorum_fraction"]), n)
         grace = float(self.s["limits.straggler_grace_s"])
         spare_until: float | None = None
         if deadline is not None:

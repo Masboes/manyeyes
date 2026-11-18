@@ -24,7 +24,7 @@ The logins live in `~/.manyeyes/auth/codex` and `~/.manyeyes/auth/claude`. The c
 No Claude login? Then use Codex-only rosters, or every review reports the Claude reviewers as failed:
 
 ```bash
-export MANYEYES_ROSTER=codex:10 MANYEYES_ROSTER_QUICK=codex:5 MANYEYES_ROSTER_DEEP=codex:10
+export MANYEYES_ROSTER=codex:6 MANYEYES_ROSTER_QUICK=codex:3 MANYEYES_ROSTER_DEEP=codex:10
 ```
 
 ## 3. Optional: the synthesis
@@ -52,7 +52,7 @@ Every line should say `ok`. `--probe` sends a one-line prompt to each reviewer k
 cd your-repo
 manyeyes review                       # current branch against origin/HEAD (or main)
 manyeyes review --base develop        # another base
-manyeyes review --roster codex:4      # fewer reviewers, faster
+manyeyes review --roster codex:2      # fewer reviewers, cheaper
 manyeyes review --roster codex:8,claude:2 --focus "check the migration"
 manyeyes review --repo owner/name --pr 123   # clone and review a GitHub PR
 manyeyes spar "Should this cache live in Redis or in-process? Argue both sides."

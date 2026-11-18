@@ -45,9 +45,9 @@ KEYS: tuple[Key, ...] = (
         "Keep it outside /tmp: Codex refuses to run its sandbox from there."),
     Key("auth_dir", Path, "", "Reviewer login homes (`codex/`, `claude/`, and `codex@<name>/`, "
         "`claude@<name>/` for more logins). Default `<data_dir>/auth`."),
-    Key("roster", str, "codex:8,claude:2",
+    Key("roster", str, "codex:4,claude:2",
         "Reviewers for a full run (the default mode).", editable=True),
-    Key("roster_quick", str, "codex:4,claude:1",
+    Key("roster_quick", str, "codex:2,claude:1",
         "Reviewers for a quick run (`mode=quick`, `--quick`): fewer and faster, for iterating.",
         editable=True),
     Key("roster_deep", str, "codex:8,claude:3",
@@ -55,13 +55,13 @@ KEYS: tuple[Key, ...] = (
         "prompt.", editable=True),
     Key("review.depth", str, "standard",
         "Prompt for full runs: `standard` or `thorough` (reads every changed file in full, "
-        "traces callers and dependencies; about 3x slower and 5x the tokens). Quick runs are "
+        "traces callers and dependencies; about 4x slower and 5x the tokens). Quick runs are "
         "always standard, deep runs always thorough.", editable=True,
         choices=("standard", "thorough")),
     Key("review.pr_context", bool, True,
         "For a pull request, give the reviewers its title, description and human comments "
         "(bots left out), marked as data, not instructions.", editable=True),
-    Key("reviewers.codex.model", str, "gpt-6.1-sol", "Codex model.", editable=True),
+    Key("reviewers.codex.model", str, "gpt-6.2-sol", "Codex model.", editable=True),
     Key("reviewers.codex.effort", str, "medium", "Codex reasoning effort.", editable=True,
         choices=EFFORTS),
     Key("reviewers.codex.sandbox", str, "read-only",
@@ -77,7 +77,8 @@ KEYS: tuple[Key, ...] = (
         "How long a reviewer login rests after a rate limit, in seconds, when no usage "
         "reading tells when its plan window resets.", editable=True),
     Key("limits.quorum_fraction", float, 0.8,
-        "Share of reviewers that must succeed before the straggler grace starts.", editable=True),
+        "Share of reviewers that must succeed before the straggler grace starts. Below 1, "
+        "with 3 or more reviewers, at most all but one.", editable=True),
     Key("limits.straggler_grace_s", int, 120,
         "Seconds the remaining reviewers get after quorum.", editable=True),
     Key("limits.clone_timeout_s", int, 300, "Limit for cloning a repository, seconds."),

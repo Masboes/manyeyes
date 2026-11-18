@@ -35,7 +35,7 @@ manyeyes login codex     # device login: open the URL it prints, sign in with Ch
 manyeyes login claude    # optional: type /login, pick the Claude account, finish in the browser, then /exit
 ```
 
-Codex is required. Claude is optional, but the default rosters include it: without a Claude login, add `export MANYEYES_ROSTER=codex:10 MANYEYES_ROSTER_QUICK=codex:5 MANYEYES_ROSTER_DEEP=codex:10` to the person's shell profile. The logins are stored in `~/.manyeyes/auth/` and reused by every run.
+Codex is required. Claude is optional, but the default rosters include it: without a Claude login, add `export MANYEYES_ROSTER=codex:6 MANYEYES_ROSTER_QUICK=codex:3 MANYEYES_ROSTER_DEEP=codex:10` to the person's shell profile. The logins are stored in `~/.manyeyes/auth/` and reused by every run.
 
 ## 4. The synthesis key (optional)
 
@@ -65,7 +65,7 @@ manyeyes review --json > /tmp/manyeyes-review.json     # 3–15 minutes; run it 
 
 - Read `.synthesis` from the JSON: findings grouped by how many reviewers agreed, each with `path:line` and a severity.
 - Exit code `0`: at least one review came back. `1`: failed (see stderr). `2`: every reviewer was rate-limited; try later.
-- `--roster codex:4` is faster; `--base <ref>` changes the base; `--focus "<text>"` steers the reviewers.
+- `--quick` uses fewer reviewers (cheaper); `--base <ref>` changes the base; `--focus "<text>"` steers the reviewers.
 - Act on findings several reviewers agree on; judge single-reviewer findings yourself, against the code.
 
 Suggested lines for the person's `CLAUDE.md`:
