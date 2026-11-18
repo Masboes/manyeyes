@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.6.2] — 2026-11-18
+
 ### Added
 - Setting `reviewers.codex.service_tier`: `standard` (default) or `fast`. `fast` turns on Codex fast mode. In a test on 6 PRs, a `gpt-6.2-sol` reviewer took 66 s instead of 129 s (median) and found the same issues; a full review then takes about 3 minutes, because the Claude reviewers become the slowest. OpenAI's pages give 2x to 2.5x for how much more fast mode counts against a ChatGPT plan's limits. With the estimate that a `gpt-6.2-sol` reviewer uses 1.5–2x the quota of a `gpt-6.1-sol` one (measured: 0.025% of a Pro week), one Pro account covers about 200–330 fast full reviews a week, against about 500–650 without fast mode. These numbers count the Codex reviewers only.
 
