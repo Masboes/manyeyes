@@ -223,6 +223,14 @@ def test_unknown_saved_setting_does_not_block_changes(client):
                       json={"reviewers.codex.future_key": None}).status_code == 200
     assert "reviewers.codex.future_key" not in client.app.state.store.get_overrides()
     assert client.put("/api/settings", headers=H, json={"x.y": None}).status_code == 422
+    # A known key with a value this version rejects: skipped, clearable, not blocking.
+    client.app.state.store.set_override("reviewers.codex.service_tier", "future-tier", "me")
+    assert client.put("/api/settings", headers=H, json={"roster": "codex:3"}).status_code == 200
+    assert client.put("/api/settings", headers=H,
+                      json={"reviewers.codex.service_tier": "nope"}).status_code == 422
+    assert client.put("/api/settings", headers=H,
+                      json={"reviewers.codex.service_tier": None}).status_code == 200
+    assert "reviewers.codex.service_tier" not in client.app.state.store.get_overrides()
 
 
 def test_settings_bad_value_is_422(client):
