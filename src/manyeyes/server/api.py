@@ -20,7 +20,7 @@ from ..store import stats
 from . import limits
 from .auth import Caller, hash_token, new_api_token
 from .mcp import synthesis_view
-from .queue import effective_settings
+from .queue import effective_settings, usable_overrides
 
 if TYPE_CHECKING:
     from ..config import Settings
@@ -302,7 +302,11 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
     def put_settings(body: dict[str, Any], c: Caller = Depends(caller)) -> dict[str, Any]:
         require_manager(c)
         changes: dict[str, Any] = {}
+        saved, stale = usable_overrides(settings, store)
         for name, value in body.items():
+            if name in stale and value is None:     # clear a saved value this version rejects
+                changes[name] = None
+                continue
             if name not in EDITABLE:
                 raise HTTPException(422, f"{name} cannot be changed here")
             try:
@@ -310,7 +314,9 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
             except ConfigError as e:
                 raise HTTPException(422, str(e)) from e
         # Validate the result as a whole before saving anything.
-        trial = {**store.get_overrides(), **{k: v for k, v in changes.items() if v is not None}}
+        # Saved values this version rejects are left out, as effective_settings
+        # does, so they cannot block every other change.
+        trial = {**saved, **{k: v for k, v in changes.items() if v is not None}}
         for k, v in changes.items():
             if v is None:
                 trial.pop(k, None)

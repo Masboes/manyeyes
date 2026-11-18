@@ -103,3 +103,14 @@ def test_forget_user(tmp_path):
     st.forget_user("alice")
     assert st.token_by_hash("h1") is None
     assert st.get_job(j["id"]) is None
+
+
+def test_one_bad_ui_setting_does_not_drop_the_others(tmp_path, settings):
+    from manyeyes.server.queue import effective_settings
+    st = Store(tmp_path / "x.db")
+    st.set_override("limits.user_jobs_per_day", 5, "me")
+    st.set_override("reviewers.codex.future_key", "x", "me")    # e.g. after a downgrade
+    st.set_override("reviewers.codex.effort", "nonsense", "me")
+    s = effective_settings(settings, st)
+    assert s["limits.user_jobs_per_day"] == 5 and s.sources["limits.user_jobs_per_day"] == "ui"
+    assert s["reviewers.codex.effort"] == settings["reviewers.codex.effort"]

@@ -15,7 +15,8 @@ import time
 from typing import TYPE_CHECKING
 
 from .. import modes
-from ..config import ConfigError, Settings
+from ..config import ConfigError, Settings, validate
+from ..engine.roster import RosterError
 from ..engine.task import SparTask
 from ..jobs import run_job
 from ..logins import LoginPool
@@ -34,14 +35,33 @@ if TYPE_CHECKING:
 log = logging.getLogger("manyeyes.queue")
 
 
+_warned: set[tuple[str, str]] = set()
+
+
+def usable_overrides(base: Settings, store: Store) -> tuple[dict, set[str]]:
+    """The saved web UI overrides this version accepts, and the names of the
+    ones it does not (an unknown key after a downgrade, a bad value)."""
+    good: dict = {}
+    bad: set[str] = set()
+    for name, value in store.get_overrides().items():
+        try:
+            # Each value alone must pass the same checks as a PUT (a downgrade
+            # can change them): known key, right type, valid on its own.
+            validate(base.with_layer("ui", {name: value}, allow_secrets=False))
+        except (ConfigError, RosterError) as e:
+            bad.add(name)
+            if (name, repr(value)) not in _warned:     # once, not on every queue poll
+                _warned.add((name, repr(value)))
+                log.warning("ignoring a saved UI setting: %s", e)
+        else:
+            good[name] = value
+    return good, bad
+
+
 def effective_settings(base: Settings, store: Store) -> Settings:
-    """Base settings plus the overrides saved from the web UI."""
-    overrides = store.get_overrides()
-    try:
-        return base.with_layer("ui", overrides, allow_secrets=False)
-    except ConfigError as e:
-        log.warning("ignoring invalid UI settings: %s", e)
-        return base
+    """Base settings plus the overrides saved from the web UI. A saved value
+    this version does not accept is skipped alone; the others still apply."""
+    return base.with_layer("ui", usable_overrides(base, store)[0], allow_secrets=False)
 
 
 class Worker:

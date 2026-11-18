@@ -211,6 +211,34 @@ def test_mcp_response_shape_matches_previous_contract(client, monkeypatch):
     assert rows[0]["id"] == res["id"] and "log" not in rows[0]
 
 
+def test_unknown_saved_setting_does_not_block_changes(client):
+    # A key saved by a newer version (then a downgrade) is skipped, not fatal.
+    client.app.state.store.set_override("reviewers.codex.future_key", "x", "me")
+    r = client.put("/api/settings", headers=H, json={"roster": "codex:2"})
+    assert r.status_code == 200
+    rows = {x["name"]: x for x in r.json()["settings"]}
+    assert rows["roster"]["value"] == "codex:2" and rows["roster"]["source"] == "ui"
+    # ... and an admin can clear it.
+    assert client.put("/api/settings", headers=H,
+                      json={"reviewers.codex.future_key": None}).status_code == 200
+    assert "reviewers.codex.future_key" not in client.app.state.store.get_overrides()
+    assert client.put("/api/settings", headers=H, json={"x.y": None}).status_code == 422
+    # A known key with a value this version rejects: skipped, clearable, not blocking.
+    client.app.state.store.set_override("reviewers.codex.service_tier", "future-tier", "me")
+    assert client.put("/api/settings", headers=H, json={"roster": "codex:3"}).status_code == 200
+    assert client.put("/api/settings", headers=H,
+                      json={"reviewers.codex.service_tier": "nope"}).status_code == 422
+    assert client.put("/api/settings", headers=H,
+                      json={"reviewers.codex.service_tier": None}).status_code == 200
+    assert "reviewers.codex.service_tier" not in client.app.state.store.get_overrides()
+    # A value of the right type that fails validation (as after a downgrade).
+    client.app.state.store.set_override("roster_quick", "nope:1", "me")
+    client.app.state.store.set_override("limits.quorum_fraction", 0.0, "me")
+    assert client.put("/api/settings", headers=H, json={"roster": "codex:4"}).status_code == 200
+    rows = {x["name"]: x for x in client.get("/api/settings", headers=H).json()["settings"]}
+    assert rows["roster_quick"]["source"] != "ui" and rows["limits.quorum_fraction"]["value"] > 0
+
+
 def test_settings_bad_value_is_422(client):
     r = client.put("/api/settings", headers=H, json={"limits.reviewer_timeout_s": "abc"})
     assert r.status_code == 422

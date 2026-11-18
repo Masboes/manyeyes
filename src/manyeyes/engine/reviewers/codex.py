@@ -47,12 +47,14 @@ class CodexReviewer(Reviewer):
     stdin_prompt = True
 
     def argv(self, prompt: str) -> list[str]:
+        tier = self.settings["reviewers.codex.service_tier"]
         return [
             self.binary() or self.binary_name, "exec",
             "--json", "--ephemeral", "--skip-git-repo-check",
             "--sandbox", self.settings["reviewers.codex.sandbox"],
             "--model", self.spec.model,
             "-c", f'model_reasoning_effort="{self.spec.effort}"',
+            *(["-c", f'service_tier="{tier}"'] if tier != "standard" else []),
             "-",
         ]
 
