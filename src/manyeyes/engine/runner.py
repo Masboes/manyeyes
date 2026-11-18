@@ -4,8 +4,8 @@ Lifecycle per reviewer: wait for a slot, start (in the jail), read stdout and
 stderr until exit or until a deadline, classify, report.
 
 Straggler policy: only successful reviews count toward quorum
-(ceil(quorum_fraction x N), at most N - 1 for N >= 3: see quorum_of). Once quorum is reached, the reviewers still
-running get `straggler_grace_s`, then they are killed. Failures never arm the
+(ceil(quorum_fraction x N), at most N - 1 for N >= 3: see quorum_of).
+Once quorum is reached, the reviewers still running get `straggler_grace_s`, then they are killed. Failures never arm the
 timer, so a burst of fast failures cannot cut short the reviewers that work.
 
 The kill is family-aware (a family is a reviewer kind: codex, claude). When
