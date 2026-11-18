@@ -22,7 +22,8 @@ async def run(settings, roster: str, workdir: Path, **layer):
 
 
 async def test_all_succeed(settings, tmp_path):
-    res = await run(settings, "codex:3@ok", tmp_path)
+    # Fraction 1: all three must finish; the 1 s test grace could kill a slow third.
+    res = await run(settings, "codex:3@ok", tmp_path, **{"limits.quorum_fraction": 1.0})
     assert [r.outcome for r in res.runs] == [Outcome.SUCCESS] * 3
     assert res.status == "done" and not res.partial
     u = res.runs[0].usage

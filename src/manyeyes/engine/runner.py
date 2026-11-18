@@ -4,7 +4,7 @@ Lifecycle per reviewer: wait for a slot, start (in the jail), read stdout and
 stderr until exit or until a deadline, classify, report.
 
 Straggler policy: only successful reviews count toward quorum
-(ceil(quorum_fraction x N)). Once quorum is reached, the reviewers still
+(ceil(quorum_fraction x N), at most N - 1 for N >= 3: see quorum_of). Once quorum is reached, the reviewers still
 running get `straggler_grace_s`, then they are killed. Failures never arm the
 timer, so a burst of fast failures cannot cut short the reviewers that work.
 
@@ -62,8 +62,8 @@ THROTTLE_RE = re.compile(r"try again in \d+(\.\d+)? ?(ms|s|sec|seconds?)\b|per m
 def quorum_of(fraction: float, n: int) -> int:
     """Successes that start the straggler grace: ceil(fraction x n). With a
     fraction below 1 and three or more reviewers, at most n - 1, so a small
-    roster (quick mode: 3) still gets the grace instead of waiting for a hung
-    reviewer's hard timeout."""
+    roster (quick mode: 3) still gets the grace. A reviewer whose family has no
+    success yet is still spared (see the module docstring)."""
     q = max(1, math.ceil(fraction * n))
     return min(q, n - 1) if fraction < 1 and n >= 3 else q
 

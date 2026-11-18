@@ -19,7 +19,7 @@ All notable changes to this project are documented here. The format follows [Kee
   - As the synthesis model, `gpt-6.2-sol` scored the same as `gpt-6.1-sol`.
 - A `gpt-6.2-sol` reviewer takes about twice as long. A full review takes about 4–5 minutes instead of about 3. A deep review of a large PR can take 15.
 - A server with its own `roster` or model settings keeps them. If a Codex plan cannot use `gpt-6.2-sol`, set `reviewers.codex.model` to `gpt-6.1-sol`.
-- Straggler rule: with 3 or more reviewers, quorum is at most all but one. Before, a 3- or 4-reviewer run needed every reviewer to succeed, so one hung reviewer held the run until its hard timeout.
+- Straggler rule: with 3 or more reviewers and `limits.quorum_fraction` below 1, quorum is at most all but one. Before, a 3- or 4-reviewer run needed every reviewer to succeed, so one hung reviewer held the run until its hard timeout. A reviewer of a provider with no finished review yet is still not cut off.
 
 ## [1.5.0] — 2026-11-16
 

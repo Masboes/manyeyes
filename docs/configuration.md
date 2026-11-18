@@ -41,7 +41,7 @@ straggler_grace_s = 90
 | `reviewers.claude.bin` | `MANYEYES_REVIEWERS_CLAUDE_BIN` | `claude` |  | Claude Code CLI command. |
 | `limits.reviewer_timeout_s` | `MANYEYES_LIMITS_REVIEWER_TIMEOUT_S` | `600` | yes | Hard limit per reviewer, seconds. |
 | `limits.login_rest_s` | `MANYEYES_LIMITS_LOGIN_REST_S` | `1800` | yes | How long a reviewer login rests after a rate limit, in seconds, when no usage reading tells when its plan window resets. |
-| `limits.quorum_fraction` | `MANYEYES_LIMITS_QUORUM_FRACTION` | `0.8` | yes | Share of reviewers that must succeed before the straggler grace starts. |
+| `limits.quorum_fraction` | `MANYEYES_LIMITS_QUORUM_FRACTION` | `0.8` | yes | Share of reviewers that must succeed before the straggler grace starts. Below 1, with 3 or more reviewers, at most all but one. |
 | `limits.straggler_grace_s` | `MANYEYES_LIMITS_STRAGGLER_GRACE_S` | `120` | yes | Seconds the remaining reviewers get after quorum. |
 | `limits.clone_timeout_s` | `MANYEYES_LIMITS_CLONE_TIMEOUT_S` | `300` |  | Limit for cloning a repository, seconds. |
 | `limits.synth_timeout_s` | `MANYEYES_LIMITS_SYNTH_TIMEOUT_S` | `300` |  | Limit for the synthesis call, seconds. |

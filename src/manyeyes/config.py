@@ -77,7 +77,8 @@ KEYS: tuple[Key, ...] = (
         "How long a reviewer login rests after a rate limit, in seconds, when no usage "
         "reading tells when its plan window resets.", editable=True),
     Key("limits.quorum_fraction", float, 0.8,
-        "Share of reviewers that must succeed before the straggler grace starts.", editable=True),
+        "Share of reviewers that must succeed before the straggler grace starts. Below 1, "
+        "with 3 or more reviewers, at most all but one.", editable=True),
     Key("limits.straggler_grace_s", int, 120,
         "Seconds the remaining reviewers get after quorum.", editable=True),
     Key("limits.clone_timeout_s", int, 300, "Limit for cloning a repository, seconds."),

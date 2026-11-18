@@ -81,7 +81,7 @@ Progress goes to stderr, the synthesis to stdout:
 ```
 $ manyeyes review --roster codex:3,claude:1
 manyeyes: job r-d0daffaa: your-repo — 4 reviewers (codex:3,claude:1)
-manyeyes: 4 reviewers started; quorum 4
+manyeyes: 4 reviewers started; quorum 3
 manyeyes: [1/4] codex#2    ok               2m27s
 manyeyes: [2/4] codex#3    ok               2m27s
 manyeyes: [3/4] codex#1    ok               2m55s
@@ -189,7 +189,7 @@ Self-hosting takes a data directory, a GitHub OAuth App and one container: see t
 | Codex model, effort | `gpt-6.2-sol`, `medium` |
 | Claude model, effort | `sonnet` (Claude Code's newest Sonnet), `high` |
 | Per-reviewer time limit | 10 minutes (20 in deep mode) |
-| Straggler rule | when 80 % of reviewers have succeeded, the rest get 2 more minutes |
+| Straggler rule | when 80 % of reviewers have succeeded (at most all but one), the rest get 2 more minutes; a provider without a finished review yet is not cut off |
 | Synthesis model | `gpt-6.1-sol` |
 
 Change any of them per run (`--roster`, `--set key=value`), in `~/.manyeyes/config.toml`, with environment variables, or — on a server — on the Settings page. See the [configuration reference](docs/configuration.md).
