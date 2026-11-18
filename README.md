@@ -183,7 +183,7 @@ Self-hosting takes a data directory, a GitHub OAuth App and one container: see t
 
 | Setting | Default |
 |---|---|
-| Reviewers, full mode (default) | `codex:4,claude:2`, standard prompt — about 4–5 minutes |
+| Reviewers, full mode (default) | `codex:4,claude:2`, standard prompt — about 4–5 minutes (about 3 with Codex fast mode) |
 | Reviewers, quick mode | `codex:2,claude:1`, standard prompt — about 3–4 minutes |
 | Reviewers, deep mode | `codex:8,claude:3`, thorough prompt — 5–15 minutes, about 10× the tokens |
 | Codex model, effort | `gpt-6.2-sol`, `medium`; fast mode off (`reviewers.codex.service_tier`) |

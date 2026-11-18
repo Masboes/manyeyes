@@ -35,13 +35,18 @@ log = logging.getLogger("manyeyes.queue")
 
 
 def effective_settings(base: Settings, store: Store) -> Settings:
-    """Base settings plus the overrides saved from the web UI."""
-    overrides = store.get_overrides()
-    try:
-        return base.with_layer("ui", overrides, allow_secrets=False)
-    except ConfigError as e:
-        log.warning("ignoring invalid UI settings: %s", e)
-        return base
+    """Base settings plus the overrides saved from the web UI. A saved value
+    this version does not accept (an unknown key after a downgrade, a bad
+    value) is skipped alone; the other overrides still apply."""
+    good: dict = {}
+    for name, value in store.get_overrides().items():
+        try:
+            base.with_layer("ui", {name: value}, allow_secrets=False)
+        except ConfigError as e:
+            log.warning("ignoring a saved UI setting: %s", e)
+        else:
+            good[name] = value
+    return base.with_layer("ui", good, allow_secrets=False)
 
 
 class Worker:

@@ -34,7 +34,7 @@ straggler_grace_s = 90
 | `review.pr_context` | `MANYEYES_REVIEW_PR_CONTEXT` | `True` | yes | For a pull request, give the reviewers its title, description and human comments (bots left out), marked as data, not instructions. |
 | `reviewers.codex.model` | `MANYEYES_REVIEWERS_CODEX_MODEL` | `gpt-6.2-sol` | yes | Codex model. |
 | `reviewers.codex.effort` | `MANYEYES_REVIEWERS_CODEX_EFFORT` | `medium` | yes | Codex reasoning effort. One of: minimal, low, medium, high, xhigh. |
-| `reviewers.codex.service_tier` | `MANYEYES_REVIEWERS_CODEX_SERVICE_TIER` | `standard` | yes | Codex speed. `fast`: Codex fast mode, about 2x faster reviewers, but it counts about 2.5x against the ChatGPT plan's limits. One of: standard, fast. |
+| `reviewers.codex.service_tier` | `MANYEYES_REVIEWERS_CODEX_SERVICE_TIER` | `standard` | yes | Codex speed. `fast`: Codex fast mode. In a test with gpt-6.2-sol, reviewers were about 2x faster; OpenAI counts fast mode about 2.5x against a ChatGPT plan's limits. One of: standard, fast. |
 | `reviewers.codex.sandbox` | `MANYEYES_REVIEWERS_CODEX_SANDBOX` | `read-only` |  | Codex's own sandbox inside the jail: `read-only` or `danger-full-access`. One of: read-only, danger-full-access. |
 | `reviewers.codex.bin` | `MANYEYES_REVIEWERS_CODEX_BIN` | `codex` |  | Codex CLI command. |
 | `reviewers.claude.model` | `MANYEYES_REVIEWERS_CLAUDE_MODEL` | `sonnet` | yes | Claude model. |

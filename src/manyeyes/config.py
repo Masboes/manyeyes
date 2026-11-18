@@ -65,8 +65,9 @@ KEYS: tuple[Key, ...] = (
     Key("reviewers.codex.effort", str, "medium", "Codex reasoning effort.", editable=True,
         choices=EFFORTS),
     Key("reviewers.codex.service_tier", str, "standard",
-        "Codex speed. `fast`: Codex fast mode, about 2x faster reviewers, but it counts about "
-        "2.5x against the ChatGPT plan's limits.", editable=True, choices=("standard", "fast")),
+        "Codex speed. `fast`: Codex fast mode. In a test with gpt-6.2-sol, reviewers were about "
+        "2x faster; OpenAI counts fast mode about 2.5x against a ChatGPT plan's limits.",
+        editable=True, choices=("standard", "fast")),
     Key("reviewers.codex.sandbox", str, "read-only",
         "Codex's own sandbox inside the jail: `read-only` or `danger-full-access`.",
         choices=("read-only", "danger-full-access")),
