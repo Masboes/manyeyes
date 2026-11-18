@@ -20,11 +20,11 @@ If `docker info` says "permission denied", the user is not in the `docker` group
 ## 2. Install the CLI
 
 ```bash
-uv tool install git+https://github.com/Masboes/manyeyes@v1.6.0    # or: pipx install git+...
-manyeyes --version                                                  # prints: manyeyes 1.6.0
+uv tool install git+https://github.com/Masboes/manyeyes@v1.6.1    # or: pipx install git+...
+manyeyes --version                                                  # prints: manyeyes 1.6.1
 ```
 
-Check: `docker pull ghcr.io/masboes/manyeyes:1.6.0` succeeds.
+Check: `docker pull ghcr.io/masboes/manyeyes:1.6.1` succeeds.
 
 ## 3. Log the reviewers in — HUMAN
 
