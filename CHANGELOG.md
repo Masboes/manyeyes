@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-11-18
+
 ### Changed
 - New defaults:
   - Codex model `gpt-6.2-sol` (was `gpt-6.1-sol`).
