@@ -109,8 +109,8 @@ manyeyes: full result: /home/you/.manyeyes/results/r-d0daffaa.md
 | `--json` | Print the result as JSON: status, outcome counts, synthesis, every review with its tokens and timing |
 | `--no-synth` | Skip the synthesis |
 | `--roster` | Reviewers for this run, for example `codex:10` or `codex:8,claude:2` |
-| `--quick` | Quick mode: fewer reviewers, about a minute — while you iterate |
-| `--deep` | Deep mode: thorough prompt, 3–5 minutes, about 5× the tokens — for risky changes |
+| `--quick` | Quick mode: fewer reviewers, about 3–4 minutes — while you iterate |
+| `--deep` | Deep mode: thorough prompt, 5–15 minutes, about 10× the tokens — for risky changes |
 | `--context owner/name` | A related repo the reviewers get read-only, to catch breakage across repos (repeat, at most 5) |
 | `manyeyes jobs` | List past runs; `manyeyes jobs show <id>` prints one again |
 | `manyeyes usage` | How much of the Codex and Claude plans is used, and when each window resets (spends no tokens) |
@@ -171,7 +171,7 @@ claude mcp add --transport http manyeyes https://your-host/manyeyes/mcp
 
 The agent then sees `swarm_review`, `swarm_spar`, `swarm_get`, `swarm_ls` and a few more. `swarm_review` blocks until the review is done and returns the synthesis, so the agent can act on it in the same turn. For a change that other repositories depend on, pass `context_repos` (for example `["acme/web", "acme/events@main"]`): the reviewers get those repos read-only and check whether the change breaks a caller, a shared contract or an event shape there. The server keeps a cached clone of each, so after the first use a context repo adds seconds, not minutes.
 
-Three modes: `"full"` (default, the normal review, 1–2 minutes), `"quick"` (fewer reviewers, about a minute, while iterating) and `"deep"` (a thorough prompt that reads every changed file and traces dependencies, 3–5 minutes and about 5× the tokens — for risky changes only).
+Three modes: `"full"` (default, the normal review, 4–5 minutes), `"quick"` (fewer reviewers, 3–4 minutes, while iterating) and `"deep"` (a thorough prompt that reads every changed file and traces dependencies, 5–15 minutes and about 10× the tokens — for risky changes only).
 
 Self-hosting takes a data directory, a GitHub OAuth App and one container: see the [self-hosting guide](docs/self-hosting.md).
 

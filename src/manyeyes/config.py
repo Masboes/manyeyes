@@ -55,7 +55,7 @@ KEYS: tuple[Key, ...] = (
         "prompt.", editable=True),
     Key("review.depth", str, "standard",
         "Prompt for full runs: `standard` or `thorough` (reads every changed file in full, "
-        "traces callers and dependencies; about 3x slower and 5x the tokens). Quick runs are "
+        "traces callers and dependencies; about 4x slower and 5x the tokens). Quick runs are "
         "always standard, deep runs always thorough.", editable=True,
         choices=("standard", "thorough")),
     Key("review.pr_context", bool, True,

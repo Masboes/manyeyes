@@ -1039,9 +1039,9 @@ function viewNew(main, params) {
   const [rSkipRow, rSkip] = checkField({ id: "f-rnosynth", label: "Skip the synthesis", hint: "You get the separate reviews only." });
   const mkMode = (id) => {
     const sel = h("select", { class: "input", id, name: "mode", "aria-describedby": `${id}-hint` },
-      h("option", { value: "full", selected: true }, "Full: the normal review, about 1–2 minutes"),
-      h("option", { value: "quick" }, "Quick: fewer reviewers, about a minute"),
-      h("option", { value: "deep" }, "Deep: thorough, 3–5 minutes, about 5× the tokens"));
+      h("option", { value: "full", selected: true }, "Full: the normal review, about 4–5 minutes"),
+      h("option", { value: "quick" }, "Quick: fewer reviewers, about 3–4 minutes"),
+      h("option", { value: "deep" }, "Deep: thorough, 5–15 minutes, about 10× the tokens"));
     return [field({ id, label: "Mode", hint: "Deep reads every changed file in full and traces callers and dependencies; use it for risky changes. The Reviewers field, when filled in, replaces the mode's reviewers.", control: sel }), sel];
   };
   const [rQuickRow, rMode] = mkMode("f-rmode");

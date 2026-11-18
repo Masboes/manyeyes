@@ -167,7 +167,7 @@ For a server shared by a team that should not be able to use up each other's quo
   |---|---|
   | `limits.user_jobs_per_hour` | reviews and spars per person per hour |
   | `limits.user_jobs_per_day` | reviews and spars per person per day |
-  | `limits.user_deep_jobs_per_day` | deep reviews per person per day (they cost about 5× the tokens) |
+  | `limits.user_deep_jobs_per_day` | deep reviews per person per day (they cost about 10× the tokens) |
   | `limits.user_reviewer_runs_per_day` | reviewer runs per person per day, summed over rosters — the fairest token cap |
   | `limits.user_concurrent_jobs` | jobs per person running at once; others' jobs go first |
 
