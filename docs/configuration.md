@@ -47,7 +47,7 @@ straggler_grace_s = 90
 | `limits.synth_timeout_s` | `MANYEYES_LIMITS_SYNTH_TIMEOUT_S` | `300` |  | Limit for the synthesis call, seconds. |
 | `limits.job_timeout_s` | `MANYEYES_LIMITS_JOB_TIMEOUT_S` | `1200` |  | Limit for a whole job, seconds. |
 | `synth.enabled` | `MANYEYES_SYNTH_ENABLED` | `True` | yes | Run the synthesis step. |
-| `synth.model` | `MANYEYES_SYNTH_MODEL` | `gpt-6.1-sol` | yes | OpenAI model for the synthesis. |
+| `synth.model` | `MANYEYES_SYNTH_MODEL` | `gpt-6.2-sol` | yes | OpenAI model for the synthesis. |
 | `synth.api_key` | `MANYEYES_SYNTH_OPENAI_API_KEY` (or `_FILE`) | — |  | OpenAI API key, used only for the synthesis. |
 | `jail.enabled` | `MANYEYES_JAIL_ENABLED` | `True` |  | Run every reviewer in a bubblewrap jail. |
 | `container.memory` | `MANYEYES_CONTAINER_MEMORY` | — |  | Memory limit for the CLI's container, Docker syntax (for example `6g`). Empty: no limit. |

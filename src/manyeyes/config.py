@@ -85,7 +85,7 @@ KEYS: tuple[Key, ...] = (
     Key("limits.synth_timeout_s", int, 300, "Limit for the synthesis call, seconds."),
     Key("limits.job_timeout_s", int, 1200, "Limit for a whole job, seconds."),
     Key("synth.enabled", bool, True, "Run the synthesis step.", editable=True),
-    Key("synth.model", str, "gpt-6.1-sol", "OpenAI model for the synthesis.", editable=True),
+    Key("synth.model", str, "gpt-6.2-sol", "OpenAI model for the synthesis.", editable=True),
     Key("synth.api_key", str, "", "OpenAI API key, used only for the synthesis.",
         env="MANYEYES_SYNTH_OPENAI_API_KEY", secret=True),
     Key("jail.enabled", bool, True, "Run every reviewer in a bubblewrap jail."),

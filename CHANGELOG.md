@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+- Synthesis model `gpt-6.2-sol` (was `gpt-6.1-sol`). On the same 12 inputs (6 PRs, 2 rounds), the synthesis took 21 s instead of 36 s (median), 36 s instead of 58 s at most. In the blind test for 1.6.0 it kept the same real issues as `gpt-6.1-sol`. The API price per token is the same.
+
 ## [1.6.0] — 2026-11-18
 
 ### Changed

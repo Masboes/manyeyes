@@ -190,7 +190,7 @@ Self-hosting takes a data directory, a GitHub OAuth App and one container: see t
 | Claude model, effort | `sonnet` (Claude Code's newest Sonnet), `high` |
 | Per-reviewer time limit | 10 minutes (20 in deep mode) |
 | Straggler rule | when 80 % of reviewers have succeeded (at most all but one), the rest get 2 more minutes; a provider without a finished review yet is not cut off |
-| Synthesis model | `gpt-6.1-sol` |
+| Synthesis model | `gpt-6.2-sol` |
 
 Change any of them per run (`--roster`, `--set key=value`), in `~/.manyeyes/config.toml`, with environment variables, or — on a server — on the Settings page. See the [configuration reference](docs/configuration.md).
 
