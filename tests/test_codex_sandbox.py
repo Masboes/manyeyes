@@ -67,3 +67,11 @@ def test_a_nonzero_command_that_ran_keeps_the_review(settings, tmp_path):
 
 def test_no_commands_at_all_keeps_the_review(settings, tmp_path):
     assert run(settings, tmp_path, say("Answer from the prompt alone.")).review
+
+
+def test_service_tier_reaches_codex_only_when_fast(settings, tmp_path):
+    assert not any(a.startswith("service_tier=") for a in make(settings, tmp_path).argv("p"))
+    fast = settings.with_layer("test", {"reviewers.codex.service_tier": "fast"})
+    argv = make(fast, tmp_path).argv("p")
+    i = argv.index('service_tier="fast"')
+    assert argv[i - 1] == "-c" and argv[-1] == "-"
