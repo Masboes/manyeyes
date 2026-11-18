@@ -211,6 +211,20 @@ def test_mcp_response_shape_matches_previous_contract(client, monkeypatch):
     assert rows[0]["id"] == res["id"] and "log" not in rows[0]
 
 
+def test_unknown_saved_setting_does_not_block_changes(client):
+    # A key saved by a newer version (then a downgrade) is skipped, not fatal.
+    client.app.state.store.set_override("reviewers.codex.future_key", "x", "me")
+    r = client.put("/api/settings", headers=H, json={"roster": "codex:2"})
+    assert r.status_code == 200
+    rows = {x["name"]: x for x in r.json()["settings"]}
+    assert rows["roster"]["value"] == "codex:2" and rows["roster"]["source"] == "ui"
+    # ... and an admin can clear it.
+    assert client.put("/api/settings", headers=H,
+                      json={"reviewers.codex.future_key": None}).status_code == 200
+    assert "reviewers.codex.future_key" not in client.app.state.store.get_overrides()
+    assert client.put("/api/settings", headers=H, json={"x.y": None}).status_code == 422
+
+
 def test_settings_bad_value_is_422(client):
     r = client.put("/api/settings", headers=H, json={"limits.reviewer_timeout_s": "abc"})
     assert r.status_code == 422

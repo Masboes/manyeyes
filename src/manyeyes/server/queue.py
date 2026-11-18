@@ -34,6 +34,9 @@ if TYPE_CHECKING:
 log = logging.getLogger("manyeyes.queue")
 
 
+_warned: set[tuple[str, str]] = set()
+
+
 def effective_settings(base: Settings, store: Store) -> Settings:
     """Base settings plus the overrides saved from the web UI. A saved value
     this version does not accept (an unknown key after a downgrade, a bad
@@ -43,7 +46,9 @@ def effective_settings(base: Settings, store: Store) -> Settings:
         try:
             base.with_layer("ui", {name: value}, allow_secrets=False)
         except ConfigError as e:
-            log.warning("ignoring a saved UI setting: %s", e)
+            if (name, repr(value)) not in _warned:     # once, not on every queue poll
+                _warned.add((name, repr(value)))
+                log.warning("ignoring a saved UI setting: %s", e)
         else:
             good[name] = value
     return base.with_layer("ui", good, allow_secrets=False)

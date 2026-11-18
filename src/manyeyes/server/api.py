@@ -302,7 +302,11 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
     def put_settings(body: dict[str, Any], c: Caller = Depends(caller)) -> dict[str, Any]:
         require_manager(c)
         changes: dict[str, Any] = {}
+        stale = set(store.get_overrides()) - set(KEY_BY_NAME)
         for name, value in body.items():
+            if name in stale and value is None:     # clear a key this version does not know
+                changes[name] = None
+                continue
             if name not in EDITABLE:
                 raise HTTPException(422, f"{name} cannot be changed here")
             try:
@@ -310,7 +314,10 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
             except ConfigError as e:
                 raise HTTPException(422, str(e)) from e
         # Validate the result as a whole before saving anything.
-        trial = {**store.get_overrides(), **{k: v for k, v in changes.items() if v is not None}}
+        # A saved key this version does not know (after a downgrade) is left out,
+        # as effective_settings does, so it cannot block every other change.
+        saved = {k: v for k, v in store.get_overrides().items() if k in KEY_BY_NAME}
+        trial = {**saved, **{k: v for k, v in changes.items() if v is not None}}
         for k, v in changes.items():
             if v is None:
                 trial.pop(k, None)
