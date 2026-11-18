@@ -15,7 +15,8 @@ import time
 from typing import TYPE_CHECKING
 
 from .. import modes
-from ..config import ConfigError, Settings
+from ..config import ConfigError, Settings, validate
+from ..engine.roster import RosterError
 from ..engine.task import SparTask
 from ..jobs import run_job
 from ..logins import LoginPool
@@ -44,8 +45,10 @@ def usable_overrides(base: Settings, store: Store) -> tuple[dict, set[str]]:
     bad: set[str] = set()
     for name, value in store.get_overrides().items():
         try:
-            base.with_layer("ui", {name: value}, allow_secrets=False)
-        except ConfigError as e:
+            # Each value alone must pass the same checks as a PUT (a downgrade
+            # can change them): known key, right type, valid on its own.
+            validate(base.with_layer("ui", {name: value}, allow_secrets=False))
+        except (ConfigError, RosterError) as e:
             bad.add(name)
             if (name, repr(value)) not in _warned:     # once, not on every queue poll
                 _warned.add((name, repr(value)))

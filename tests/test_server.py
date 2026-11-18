@@ -231,6 +231,12 @@ def test_unknown_saved_setting_does_not_block_changes(client):
     assert client.put("/api/settings", headers=H,
                       json={"reviewers.codex.service_tier": None}).status_code == 200
     assert "reviewers.codex.service_tier" not in client.app.state.store.get_overrides()
+    # A value of the right type that fails validation (as after a downgrade).
+    client.app.state.store.set_override("roster_quick", "nope:1", "me")
+    client.app.state.store.set_override("limits.quorum_fraction", 0.0, "me")
+    assert client.put("/api/settings", headers=H, json={"roster": "codex:4"}).status_code == 200
+    rows = {x["name"]: x for x in client.get("/api/settings", headers=H).json()["settings"]}
+    assert rows["roster_quick"]["source"] != "ui" and rows["limits.quorum_fraction"]["value"] > 0
 
 
 def test_settings_bad_value_is_422(client):
