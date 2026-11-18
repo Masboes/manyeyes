@@ -319,7 +319,7 @@ When it runs, two lessons from the design review apply:
 | Decision | Status |
 |---|---|
 | Public name | manyeyes (2026-11-10) |
-| Default roster | measured: full `codex:8,claude:2`, quick `codex:4,claude:1`, deep `codex:8,claude:3` (thorough) |
+| Default roster | measured (2026-11-18, `gpt-6.2-sol`): full `codex:4,claude:2`, quick `codex:2,claude:1`, deep `codex:8,claude:3` (thorough) |
 | Claude | Optional reviewer; in the default rosters because it finds bugs Codex misses |
 | License | Apache-2.0 (2026-11-10) |
 

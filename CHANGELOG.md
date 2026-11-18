@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+- Codex model `gpt-6.2-sol` (was `gpt-6.1-sol`), and fewer Codex reviewers: full `codex:4,claude:2` (was `codex:8,claude:2`), quick `codex:2,claude:1` (was `codex:4,claude:1`). Deep stays `codex:8,claude:3`. In a blind test on 6 real PRs, 10 × `gpt-6.2-sol` found 34 real issues (11 high or medium) against 6 (4) for 10 × `gpt-6.1-sol`; two 6.1 runs a week apart gave the same 6. The new full roster finds about 60% more high and medium issues than the old one, for about the same Codex quota (estimated from tokens), and its synthesis kept 49 real issues against 31. A `gpt-6.2-sol` reviewer takes about twice as long, so a full review now takes about 4–5 minutes instead of about 3; a deep review of a large PR can take 15. Claude reviewers still find other, mostly low, issues, at no extra time. The synthesis stays `gpt-6.1-sol`: `gpt-6.2-sol` scored the same there. A server with its own `roster` or model settings keeps them. If a Codex plan cannot use `gpt-6.2-sol`, set `reviewers.codex.model` to `gpt-6.1-sol`.
+
 ## [1.5.0] — 2026-11-16
 
 ### Added

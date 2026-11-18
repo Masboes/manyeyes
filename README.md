@@ -63,8 +63,8 @@ manyeyes doctor --probe
 cd your-repo
 manyeyes review                                  # this branch against origin/HEAD (or main)
 manyeyes review --base develop                   # against another base
-manyeyes review --roster codex:4                 # fewer reviewers: faster, cheaper
-manyeyes review --roster codex:8,claude:2        # mix in Claude
+manyeyes review --roster codex:2                 # fewer reviewers: cheaper
+manyeyes review --roster codex:8,claude:2        # more reviewers
 manyeyes review --focus "check the migration for data loss"
 manyeyes review --repo owner/name --pr 123       # clone and review a GitHub pull request
 ```
@@ -183,12 +183,12 @@ Self-hosting takes a data directory, a GitHub OAuth App and one container: see t
 
 | Setting | Default |
 |---|---|
-| Reviewers, full mode (default) | `codex:8,claude:2`, standard prompt — about 1–2 minutes |
-| Reviewers, quick mode | `codex:4,claude:1`, standard prompt — about a minute |
-| Reviewers, deep mode | `codex:8,claude:3`, thorough prompt — 3–5 minutes, about 5× the tokens |
-| Codex model, effort | `gpt-6.1-sol`, `medium` |
+| Reviewers, full mode (default) | `codex:4,claude:2`, standard prompt — about 4–5 minutes |
+| Reviewers, quick mode | `codex:2,claude:1`, standard prompt — about 3–4 minutes |
+| Reviewers, deep mode | `codex:8,claude:3`, thorough prompt — 5–15 minutes, about 10× the tokens |
+| Codex model, effort | `gpt-6.2-sol`, `medium` |
 | Claude model, effort | `sonnet` (Claude Code's newest Sonnet), `high` |
-| Per-reviewer time limit | 10 minutes |
+| Per-reviewer time limit | 10 minutes (20 in deep mode) |
 | Straggler rule | when 80 % of reviewers have succeeded, the rest get 2 more minutes |
 | Synthesis model | `gpt-6.1-sol` |
 

@@ -52,7 +52,7 @@ Every line should say `ok`. `--probe` sends a one-line prompt to each reviewer k
 cd your-repo
 manyeyes review                       # current branch against origin/HEAD (or main)
 manyeyes review --base develop        # another base
-manyeyes review --roster codex:4      # fewer reviewers, faster
+manyeyes review --roster codex:2      # fewer reviewers, cheaper
 manyeyes review --roster codex:8,claude:2 --focus "check the migration"
 manyeyes review --repo owner/name --pr 123   # clone and review a GitHub PR
 manyeyes spar "Should this cache live in Redis or in-process? Argue both sides."

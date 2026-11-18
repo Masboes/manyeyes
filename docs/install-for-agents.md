@@ -65,7 +65,7 @@ manyeyes review --json > /tmp/manyeyes-review.json     # 3–15 minutes; run it 
 
 - Read `.synthesis` from the JSON: findings grouped by how many reviewers agreed, each with `path:line` and a severity.
 - Exit code `0`: at least one review came back. `1`: failed (see stderr). `2`: every reviewer was rate-limited; try later.
-- `--roster codex:4` is faster; `--base <ref>` changes the base; `--focus "<text>"` steers the reviewers.
+- `--quick` uses fewer reviewers (cheaper); `--base <ref>` changes the base; `--focus "<text>"` steers the reviewers.
 - Act on findings several reviewers agree on; judge single-reviewer findings yourself, against the code.
 
 Suggested lines for the person's `CLAUDE.md`:
