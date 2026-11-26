@@ -349,6 +349,7 @@ class Worker:
         from ..alerts import usage_alerts
         from ..usage import probe
         while (minutes := int(self.base["usage.interval_min"])) > 0:
+            windows = []
             try:
                 windows = await probe(self.base)
                 if windows:
@@ -356,7 +357,6 @@ class Worker:
                 self.store.prune_usage(time.time() - 30 * 86400)
             except Exception:  # noqa: BLE001 - never let the loop die
                 log.exception("usage probe failed")
-                windows = []
             if windows:
                 try:
                     s = effective_settings(self.base, self.store)

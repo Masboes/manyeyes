@@ -372,7 +372,7 @@ def _check_alert_url(url: str) -> None:
     from urllib.parse import urlsplit
     try:
         u = urlsplit(url)
-        ok = u.scheme in ("https", "http") and bool(u.hostname) and (u.port or 1) > 0
+        ok = u.scheme in ("https", "http") and bool(u.hostname) and (u.port is None or u.port > 0)
     except ValueError:
         ok = False
     if not ok:

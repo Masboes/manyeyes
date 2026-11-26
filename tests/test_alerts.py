@@ -31,7 +31,7 @@ def test_plan_alerts_once_per_period():
     assert plan([w(81)], {}, 80) == ([w(81)], [])
     assert plan([w(85)], {K: {"resets_at": None}}, 80) == ([], [])       # already sent
     assert plan([w(77)], {K: {"resets_at": None}}, 80) == ([], [])       # inside the 5 points
-    assert plan([w(74)], {K: {"resets_at": None}}, 80) == ([], [K])      # dropped: rearm
+    assert plan([w(75)], {K: {"resets_at": None}}, 80) == ([], [K])      # dropped 5: rearm
     # A reset between two readings that are both above the line.
     nxt = w(82, resets_at=8 * 86400)
     assert plan([nxt], {K: {"resets_at": 86400}}, 80) == ([nxt], [K])
@@ -119,8 +119,34 @@ def test_no_address_no_alert(settings, tmp_path):
 @pytest.mark.parametrize("bad", [{"alerts.usage_percent": 101}, {"alerts.usage_percent": -1},
                                  {"alerts.url": "ntfy.sh/topic"},
                                  {"alerts.url": "https://ntfy.sh:abc/topic"},
-                                 {"alerts.url": "https:///topic"}])
+                                 {"alerts.url": "https:///topic"},
+                                 {"alerts.url": "https://ntfy.sh:0/topic"}])
 def test_bad_alert_settings(settings, bad):
     with pytest.raises(ConfigError) as e:
         validate(settings.with_layer("flag", bad))
     assert "topic" not in str(e.value)
+
+
+def test_record_without_reset_time_gets_one_and_a_new_period_alerts(settings, tmp_path):
+    store = Store(tmp_path / "a.db")
+    s = _alert_settings(settings)
+    got, tr = _recorder()
+    assert asyncio.run(usage_alerts(store, s, [w(82)], transport=tr)) == 1
+    assert asyncio.run(usage_alerts(store, s, [w(84, resets_at=86400)], transport=tr)) == 0
+    assert store.alert_states()[K]["resets_at"] == 86400
+    assert asyncio.run(usage_alerts(store, s, [w(81, resets_at=8 * 86400)], transport=tr)) == 1
+
+
+def test_every_window_gets_its_tries(settings, tmp_path):
+    got, tr = _recorder(status=500)
+    new = [w(90), w(90, provider="claude"), w(90, login="seat-2")]
+    asyncio.run(usage_alerts(Store(tmp_path / "a.db"), _alert_settings(settings), new,
+                             transport=tr, retry_gap_s=0))
+    assert len(got) == 9
+
+
+def test_non_ascii_title_is_encoded(settings):
+    got, tr = _recorder()
+    s = _alert_settings(settings, **{"server.public_urls": ["https://bücher.example/m"]})
+    assert asyncio.run(send(s, "week (Modèle)", "b", transport=tr))
+    assert got[0].headers["Title"].startswith("=?UTF-8?B?") and "Click" not in got[0].headers

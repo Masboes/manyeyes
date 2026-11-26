@@ -9,8 +9,8 @@ that has had its alert. The record goes when the window drops 5 points below
 the line, or when its reset time moves on by more than 12 hours (a new period).
 So a restart, a reading that lacks the window, or a reading that fails sends
 nothing again. A send that fails records nothing: the next reading tries again.
-A send that arrives, followed by a crash before the record is written, can
-repeat once.
+A send whose answer is lost (a timeout after the address took it, or a crash
+before the record is written) can repeat: delivery is at least once.
 
 Windows shorter than a day do not alert: they reset soon, and a login that hits
 one rests by itself (logins.py).
@@ -21,6 +21,7 @@ of this module names it, and a filter keeps httpx's request log from naming it.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import re
 import time
@@ -53,7 +54,10 @@ class _HideSecretUrls(logging.Filter):
         return not any(u in msg for u in self.urls)
 
 
-logging.getLogger("httpx").addFilter(_HideSecretUrls())
+# A filter works on the records of its own logger only, so each one gets it.
+for _name in ("httpx", "httpcore.connection", "httpcore.http11", "httpcore.http2",
+              "httpcore.proxy"):
+    logging.getLogger(_name).addFilter(_HideSecretUrls())
 
 
 def _hide(url: str) -> None:
@@ -90,12 +94,19 @@ def plan(windows: list[Window], states: dict[tuple[str, str, str], dict],
         if st is not None:
             new_period = (w.resets_at and st.get("resets_at")
                           and w.resets_at > st["resets_at"] + NEW_PERIOD_S)
-            if w.used_percent < threshold - REARM_POINTS or new_period:
+            if w.used_percent <= threshold - REARM_POINTS or new_period:
                 clear.append(key)
                 st = None
         if st is None and w.used_percent >= threshold:
             send.append(w)
     return send, clear
+
+
+def _header(value: str) -> str:
+    """HTTP headers are ASCII. ntfy decodes RFC 2047 for anything else."""
+    if value.isascii():
+        return value
+    return "=?UTF-8?B?" + base64.b64encode(value.encode()).decode() + "?="
 
 
 def _left(seconds: float) -> str:
@@ -124,9 +135,9 @@ async def send(settings: Settings, title: str, body: str, *,
     if not url:
         return False
     _hide(url)
-    headers = {"Title": title, "Tags": "warning"}
+    headers = {"Title": _header(title), "Tags": "warning"}
     public = settings["server.public_urls"]
-    if public:
+    if public and public[0].isascii():
         headers["Click"] = public[0]
     for attempt in range(1, SEND_TRIES + 1):
         try:
@@ -150,12 +161,19 @@ async def usage_alerts(store: Store, settings: Settings, windows: list[Window], 
     threshold = float(settings["alerts.usage_percent"])
     if not settings["alerts.url"] or threshold <= 0:
         return 0
-    to_send, to_clear = plan(windows, store.alert_states(), threshold)
+    states = store.alert_states()
+    to_send, to_clear = plan(windows, states, threshold)
     for key in to_clear:
         store.clear_alert(*key)
-    sent = 0
-    for w in to_send:
+    for w in windows:   # a record without a reset time gets the first one seen
+        st = states.get((w.provider, w.login, w.window))
+        if st and st.get("resets_at") is None and w.resets_at and not w.error:
+            store.backfill_alert_reset(w.provider, w.login, w.window, w.resets_at)
+
+    async def one(w: Window) -> bool:
         if await send(settings, *message(w), transport=transport, retry_gap_s=retry_gap_s):
             store.set_alert(w.provider, w.login, w.window, w.resets_at)
-            sent += 1
-    return sent
+            return True
+        return False
+    # At the same time: a slow address never leaves a later window without a try.
+    return sum(await asyncio.gather(*(one(w) for w in to_send)))
