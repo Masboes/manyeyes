@@ -8,8 +8,8 @@ plain text with a `Title` header, the form that ntfy takes.
 that has had its alert. The record goes when the window drops to 5 points below
 the line, or when a new period begins: the reset time moves on by more than 12
 hours, or (for a record without a reset time) the alert came before the start
-of the period that the reading shows, or (no reset time at all) the alert is
-older than the window.
+of the period that the reading shows, or (no reset time on either side) the
+alert is older than the window.
 So a restart, a reading that lacks the window, or a reading that fails sends
 nothing again. A send that fails records nothing: the next reading tries again.
 A send whose answer is lost (a timeout after the address took it, or a crash
@@ -92,21 +92,21 @@ def plan(windows: list[Window], states: dict[tuple[str, str, str], dict],
         key = (w.provider, w.login, w.window)
         st = states.get(key)
         if st is not None:
-            if st.get("resets_at") and not w.resets_at:   # the reading has no reset time
-                new_period = now > st["resets_at"] + NEW_PERIOD_S
-            elif st.get("resets_at"):
+            alerted = now if st.get("alerted_at") is None else st["alerted_at"]
+            length = 60 * (window_minutes(w.window) or 0)
+            if st.get("resets_at") and w.resets_at:
                 new_period = w.resets_at > st["resets_at"] + NEW_PERIOD_S
-            else:   # the alert has no reset time: did it come before this period began?
-                start = (w.resets_at or 0) - 60 * (window_minutes(w.window) or 0)
-                new_period = bool(w.resets_at) and st["alerted_at"] < start
-                if w.resets_at and not new_period:
-                    backfill.append(w)
-            # No reset time ever: an alert older than the window is from an earlier period.
-            new_period = new_period or (
-                now > st.get("alerted_at", now) + 60 * (window_minutes(w.window) or 0))
+            elif st.get("resets_at"):   # the reading has no reset time
+                new_period = now > st["resets_at"] + NEW_PERIOD_S
+            elif w.resets_at:   # the alert has no reset time: did it come before this period?
+                new_period = alerted < w.resets_at - length
+            else:   # no reset time at all: an alert older than the window is from before
+                new_period = now > alerted + length
             if w.used_percent <= max(0.0, threshold - REARM_POINTS) or new_period:
                 clear.append(key)
                 st = None
+            elif not st.get("resets_at") and w.resets_at and w.resets_at > alerted:
+                backfill.append(w)
         if st is None and w.used_percent >= threshold and key not in seen:
             send.append(w)
             seen.add(key)

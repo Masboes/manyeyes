@@ -202,3 +202,14 @@ def test_reset_time_learned_later_is_saved(settings, tmp_path):
     later = time.time() + 5 * 86400
     assert asyncio.run(usage_alerts(store, s, [w(84, resets_at=later)], transport=tr)) == 0
     assert store.alert_states()[K]["resets_at"] == later
+
+
+def test_age_fallback_waits_for_a_known_reset():
+    st = {K: {"resets_at": 9 * 86400, "alerted_at": 0.0}}
+    # More than a week after the alert, but the known reset has not come yet.
+    assert plan([w(84, resets_at=9 * 86400)], st, 80, now=8 * 86400)[0] == []
+
+
+def test_no_backfill_with_a_reset_before_the_alert():
+    st = {K: {"resets_at": None, "alerted_at": 1000.0}}
+    assert plan([w(84, resets_at=500.0)], st, 80, now=2000.0) == ([], [], [])
