@@ -35,9 +35,10 @@ def test_plan_alerts_once_per_period():
     assert plan([w(75)], {K: {"resets_at": None}}, 80) == ([], [K], [])  # dropped 5: rearm
     # A reset between two readings that are both above the line.
     nxt = w(82, resets_at=8 * 86400)
-    assert plan([nxt], {K: {"resets_at": 86400}}, 80) == ([nxt], [K], [])
+    st = {K: {"resets_at": 86400, "alerted_at": 0.0}}
+    assert plan([nxt], st, 80, now=3600) == ([nxt], [K], [])
     # A reset time that drifts by half an hour is the same period.
-    assert plan([w(86, resets_at=86400 + 1800)], {K: {"resets_at": 86400}}, 80) == ([], [], [])
+    assert plan([w(86, resets_at=86400 + 1800)], st, 80, now=3600) == ([], [], [])
     assert plan([w(90, window="5 hours")], {}, 80) == ([], [], [])
     assert plan([w(None, error="boom")], {}, 80) == ([], [], [])
     assert plan([w(99)], {}, 0) == ([], [], [])
@@ -204,12 +205,14 @@ def test_reset_time_learned_later_is_saved(settings, tmp_path):
     assert store.alert_states()[K]["resets_at"] == later
 
 
-def test_age_fallback_waits_for_a_known_reset():
+def test_known_resets_decide_and_alert_age_does_not():
     st = {K: {"resets_at": 9 * 86400, "alerted_at": 0.0}}
     # More than a week after the alert, but the known reset has not come yet.
     assert plan([w(84, resets_at=9 * 86400)], st, 80, now=8 * 86400)[0] == []
 
 
-def test_no_backfill_with_a_reset_before_the_alert():
+def test_a_past_reset_time_counts_as_unknown():
     st = {K: {"resets_at": None, "alerted_at": 1000.0}}
     assert plan([w(84, resets_at=500.0)], st, 80, now=2000.0) == ([], [], [])
+    # After the full window, the age fallback rearms in spite of the stale reset.
+    assert plan([w(84, resets_at=500.0)], st, 80, now=1000.0 + 8 * 86400)[0] == [w(84, resets_at=500.0)]

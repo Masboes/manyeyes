@@ -94,18 +94,19 @@ def plan(windows: list[Window], states: dict[tuple[str, str, str], dict],
         if st is not None:
             alerted = now if st.get("alerted_at") is None else st["alerted_at"]
             length = 60 * (window_minutes(w.window) or 0)
-            if st.get("resets_at") and w.resets_at:
-                new_period = w.resets_at > st["resets_at"] + NEW_PERIOD_S
-            elif st.get("resets_at"):   # the reading has no reset time
+            reset = w.resets_at if w.resets_at and w.resets_at > now else None   # past: unknown
+            if st.get("resets_at") and reset:
+                new_period = reset > st["resets_at"] + NEW_PERIOD_S
+            elif st.get("resets_at"):   # the reading has no usable reset time
                 new_period = now > st["resets_at"] + NEW_PERIOD_S
-            elif w.resets_at:   # the alert has no reset time: did it come before this period?
-                new_period = alerted < w.resets_at - length
+            elif reset:   # the alert has no reset time: did it come before this period?
+                new_period = alerted < reset - length
             else:   # no reset time at all: an alert older than the window is from before
                 new_period = now > alerted + length
             if w.used_percent <= max(0.0, threshold - REARM_POINTS) or new_period:
                 clear.append(key)
                 st = None
-            elif not st.get("resets_at") and w.resets_at and w.resets_at > alerted:
+            elif not st.get("resets_at") and reset:
                 backfill.append(w)
         if st is None and w.used_percent >= threshold and key not in seen:
             send.append(w)
