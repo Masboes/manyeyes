@@ -148,6 +148,13 @@ KEYS: tuple[Key, ...] = (
     Key("update.repo", str, "Masboes/manyeyes", "GitHub repository whose releases are checked."),
     Key("usage.interval_min", int, 30, "Server: read the Codex and Claude plan usage this "
         "often, in minutes (no tokens are spent). 0: off."),
+    Key("alerts.url", str, "", "Server: where alerts go. An HTTP(S) address that takes a POST "
+        "with plain text and a `Title` header, such as an ntfy topic (`https://ntfy.sh/<topic>`). "
+        "Empty: no alerts. A secret: anyone with an ntfy topic can read it.", secret=True),
+    Key("alerts.usage_percent", int, 80, "Server: send an alert when a plan window of a day or "
+        "longer (such as the weekly window) of a reviewer login reaches this percent. "
+        "Once per window period; again after a reset, or after the window drops to 5 points "
+        "below this percent. 0: off.", editable=True),
     Key("retention.days", int, 0, "Delete jobs older than this. 0 keeps everything."),
     Key("retention.keep_telemetry", bool, True, "Keep reviewer telemetry when deleting jobs."),
 )
@@ -361,6 +368,20 @@ def load(
     return settings
 
 
+def _check_alert_url(url: str) -> None:
+    """An error never repeats the address: it is a secret."""
+    from urllib.parse import urlsplit
+    if any(c.isspace() or not c.isprintable() for c in url):
+        raise ConfigError("alerts.url must not contain spaces or control characters")
+    try:
+        u = urlsplit(url)
+        ok = u.scheme in ("https", "http") and bool(u.hostname) and (u.port is None or u.port > 0)
+    except ValueError:
+        ok = False
+    if not ok:
+        raise ConfigError("alerts.url must be an https:// (or http://) address with a host")
+
+
 def validate(s: Settings) -> None:
     q = s["limits.quorum_fraction"]
     if not 0 < q <= 1:
@@ -375,6 +396,10 @@ def validate(s: Settings) -> None:
                  "limits.user_concurrent_jobs", "usage.interval_min"):
         if s[name] < 0:
             raise ConfigError(f"{name} must be 0 (off or no limit) or more")
+    if not 0 <= s["alerts.usage_percent"] <= 100:
+        raise ConfigError("alerts.usage_percent must be 0 (off) to 100")
+    if s["alerts.url"]:
+        _check_alert_url(s["alerts.url"])
     if s["limits.clone_timeout_s"] >= s["limits.job_timeout_s"]:
         raise ConfigError("limits.clone_timeout_s must be below limits.job_timeout_s")
     if bool(s["auth.bootstrap_token"]) != bool(s["auth.bootstrap_login"]):

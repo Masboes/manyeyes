@@ -346,6 +346,27 @@ class Store:
             f"{updates}, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
             (kind, name, *fields.values(), time.time(), by))
 
+    # -- quota alerts -------------------------------------------------------
+
+    def alert_states(self) -> dict[tuple[str, str, str], dict[str, Any]]:
+        return {(r["provider"], r["login"], r["window"]): r
+                for r in self._all("SELECT * FROM alert_state")}
+
+    def set_alert(self, provider: str, login: str, window: str,
+                  resets_at: float | None) -> None:
+        self._write("INSERT OR REPLACE INTO alert_state (provider, login, window, alerted_at, "
+                    "resets_at) VALUES (?,?,?,?,?)",
+                    (provider, login, window, time.time(), resets_at))
+
+    def backfill_alert_reset(self, provider: str, login: str, window: str,
+                             resets_at: float) -> None:
+        self._write("UPDATE alert_state SET resets_at=? WHERE provider=? AND login=? AND "
+                    "window=? AND resets_at IS NULL", (resets_at, provider, login, window))
+
+    def clear_alert(self, provider: str, login: str, window: str) -> None:
+        self._write("DELETE FROM alert_state WHERE provider=? AND login=? AND window=?",
+                    (provider, login, window))
+
     def prune_usage(self, before: float) -> int:
         return self._write("DELETE FROM usage_snapshots WHERE ts<?", (before,))
 

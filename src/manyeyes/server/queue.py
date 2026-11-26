@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from ..store.db import Store
 
 log = logging.getLogger("manyeyes.queue")
+ALERTS_TIMEOUT_S = 90   # all quota alerts of one usage reading
 
 
 _warned: set[tuple[str, str]] = set()
@@ -345,8 +346,10 @@ class Worker:
             await asyncio.sleep(12 * 3600)
 
     async def _usage_loop(self) -> None:
+        from ..alerts import usage_alerts
         from ..usage import probe
         while (minutes := int(self.base["usage.interval_min"])) > 0:
+            windows = []
             try:
                 windows = await probe(self.base)
                 if windows:
@@ -354,6 +357,12 @@ class Worker:
                 self.store.prune_usage(time.time() - 30 * 86400)
             except Exception:  # noqa: BLE001 - never let the loop die
                 log.exception("usage probe failed")
+            if windows:
+                try:
+                    s = effective_settings(self.base, self.store)
+                    await asyncio.wait_for(usage_alerts(self.store, s, windows), ALERTS_TIMEOUT_S)
+                except Exception as e:  # noqa: BLE001 - the text can contain the address
+                    log.warning("quota alerts failed: %s", type(e).__name__)
             await asyncio.sleep(minutes * 60)
 
     async def _retention_loop(self) -> None:

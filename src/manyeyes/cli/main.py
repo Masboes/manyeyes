@@ -116,6 +116,8 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("login")
     u.add_argument("--yes", action="store_true", help="erase without asking")
 
+    sub.add_parser("test-alert", help="send a test alert to alerts.url")
+
     cf = sub.add_parser("config", help="show effective settings")
     cf.add_argument("--reference", action="store_true",
                     help="print the configuration reference table (markdown)")
@@ -447,6 +449,18 @@ async def _version(args: argparse.Namespace, s: Settings) -> int:
     return 0
 
 
+async def _test_alert(s: Settings) -> int:
+    from ..alerts import send
+    if not s["alerts.url"]:
+        err("alerts.url is not set (MANYEYES_ALERTS_URL)")
+        return 1
+    if await send(s, "manyeyes: test alert", "This is a test alert from manyeyes."):
+        err("sent")
+        return 0
+    err("not sent: the address did not take the alert (see the log lines above)")
+    return 1
+
+
 def cmd_config(args: argparse.Namespace, s: Settings) -> int:
     if args.reference:
         from ..config import reference_markdown
@@ -514,6 +528,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.cmd == "config":
             return cmd_config(args, s)
+        if args.cmd == "test-alert":
+            return asyncio.run(_test_alert(s))
         if args.cmd == "version":
             return asyncio.run(_version(args, s))
     except (SourceError, ConfigError, RosterError, SwarmError) as e:
