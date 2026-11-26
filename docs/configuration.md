@@ -22,6 +22,7 @@ straggler_grace_s = 90
 `manyeyes config` prints the effective value and source of every key.
 
 <!-- generated: manyeyes config --reference -->
+
 | Key | Environment | Default | Web UI | Meaning |
 |---|---|---|---|---|
 | `data_dir` | `MANYEYES_DATA_DIR` | `~/.manyeyes` |  | Database, runs, secrets file and auth homes. Keep it outside /tmp: Codex refuses to run its sandbox from there. |
@@ -81,6 +82,6 @@ straggler_grace_s = 90
 | `update.repo` | `MANYEYES_UPDATE_REPO` | `Masboes/manyeyes` |  | GitHub repository whose releases are checked. |
 | `usage.interval_min` | `MANYEYES_USAGE_INTERVAL_MIN` | `30` |  | Server: read the Codex and Claude plan usage this often, in minutes (no tokens are spent). 0: off. |
 | `alerts.url` | `MANYEYES_ALERTS_URL` (or `_FILE`) | — |  | Server: where alerts go. An HTTP(S) address that takes a POST with plain text and a `Title` header, such as an ntfy topic (`https://ntfy.sh/<topic>`). Empty: no alerts. A secret: anyone with an ntfy topic can read it. |
-| `alerts.usage_percent` | `MANYEYES_ALERTS_USAGE_PERCENT` | `80` | yes | Server: send an alert when a plan window of a day or longer (such as the weekly window) of a reviewer login reaches this percent. Once per crossing. 0: off. |
+| `alerts.usage_percent` | `MANYEYES_ALERTS_USAGE_PERCENT` | `80` | yes | Server: send an alert when a plan window of a day or longer (such as the weekly window) of a reviewer login reaches this percent. Once per window period; again after a reset, or after a drop of 5 points. 0: off. |
 | `retention.days` | `MANYEYES_RETENTION_DAYS` | `0` |  | Delete jobs older than this. 0 keeps everything. |
 | `retention.keep_telemetry` | `MANYEYES_RETENTION_KEEP_TELEMETRY` | `True` |  | Keep reviewer telemetry when deleting jobs. |

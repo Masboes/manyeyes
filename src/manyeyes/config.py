@@ -153,7 +153,7 @@ KEYS: tuple[Key, ...] = (
         "Empty: no alerts. A secret: anyone with an ntfy topic can read it.", secret=True),
     Key("alerts.usage_percent", int, 80, "Server: send an alert when a plan window of a day or "
         "longer (such as the weekly window) of a reviewer login reaches this percent. "
-        "Once per crossing. 0: off.", editable=True),
+        "Once per window period; again after a reset, or after a drop of 5 points. 0: off.", editable=True),
     Key("retention.days", int, 0, "Delete jobs older than this. 0 keeps everything."),
     Key("retention.keep_telemetry", bool, True, "Keep reviewer telemetry when deleting jobs."),
 )
@@ -367,6 +367,18 @@ def load(
     return settings
 
 
+def _check_alert_url(url: str) -> None:
+    """An error never repeats the address: it is a secret."""
+    from urllib.parse import urlsplit
+    try:
+        u = urlsplit(url)
+        ok = u.scheme in ("https", "http") and bool(u.hostname) and (u.port or 1) > 0
+    except ValueError:
+        ok = False
+    if not ok:
+        raise ConfigError("alerts.url must be an https:// (or http://) address with a host")
+
+
 def validate(s: Settings) -> None:
     q = s["limits.quorum_fraction"]
     if not 0 < q <= 1:
@@ -383,8 +395,8 @@ def validate(s: Settings) -> None:
             raise ConfigError(f"{name} must be 0 (off or no limit) or more")
     if not 0 <= s["alerts.usage_percent"] <= 100:
         raise ConfigError("alerts.usage_percent must be 0 (off) to 100")
-    if s["alerts.url"] and not s["alerts.url"].startswith(("https://", "http://")):
-        raise ConfigError("alerts.url must start with https:// or http://")
+    if s["alerts.url"]:
+        _check_alert_url(s["alerts.url"])
     if s["limits.clone_timeout_s"] >= s["limits.job_timeout_s"]:
         raise ConfigError("limits.clone_timeout_s must be below limits.job_timeout_s")
     if bool(s["auth.bootstrap_token"]) != bool(s["auth.bootstrap_login"]):

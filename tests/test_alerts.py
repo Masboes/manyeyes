@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import time
 
 import httpx
 import pytest
 
-from manyeyes.alerts import crossings, long_window, message, send, usage_alerts
+from manyeyes.alerts import long_window, message, plan, send, usage_alerts
 from manyeyes.config import ConfigError, Settings, validate
 from manyeyes.store.db import Store
 from manyeyes.usage import Window
@@ -19,19 +18,28 @@ def w(pct, window="week", provider="codex", login="default", error=None, resets_
 
 
 def test_long_windows_only():
-    assert long_window("week") and long_window("week (Fable)") and long_window("7 days")
-    assert not long_window("5 hours") and not long_window("window")
+    for name in ("week", "week (Fable)", "7 days", "2 days (Extra)", "36 hours"):
+        assert long_window(name), name
+    for name in ("5 hours", "300 min", "window"):
+        assert not long_window(name), name
 
 
-def test_alert_once_per_crossing():
-    key = ("codex", "default", "week")
-    assert crossings([w(81)], {key: 79}, 80) == [w(81)]
-    assert crossings([w(85)], {key: 81}, 80) == []          # already above
-    assert crossings([w(3)], {key: 86}, 80) == []           # the window reset
-    assert crossings([w(80)], {}, 80) == [w(80)]            # no earlier reading
-    assert crossings([w(90, window="5 hours")], {}, 80) == []
-    assert crossings([w(None, error="boom")], {}, 80) == []
-    assert crossings([w(99)], {}, 0) == []                  # off
+K = ("codex", "default", "week")
+
+
+def test_plan_alerts_once_per_period():
+    assert plan([w(81)], {}, 80) == ([w(81)], [])
+    assert plan([w(85)], {K: {"resets_at": None}}, 80) == ([], [])       # already sent
+    assert plan([w(77)], {K: {"resets_at": None}}, 80) == ([], [])       # inside the 5 points
+    assert plan([w(74)], {K: {"resets_at": None}}, 80) == ([], [K])      # dropped: rearm
+    # A reset between two readings that are both above the line.
+    nxt = w(82, resets_at=8 * 86400)
+    assert plan([nxt], {K: {"resets_at": 86400}}, 80) == ([nxt], [K])
+    # A reset time that drifts by half an hour is the same period.
+    assert plan([w(86, resets_at=86400 + 1800)], {K: {"resets_at": 86400}}, 80) == ([], [])
+    assert plan([w(90, window="5 hours")], {}, 80) == ([], [])
+    assert plan([w(None, error="boom")], {}, 80) == ([], [])
+    assert plan([w(99)], {}, 0) == ([], [])
 
 
 def test_message_names_login_and_reset():
@@ -68,16 +76,37 @@ def test_failed_send_retries_and_never_logs_the_address(settings, caplog):
     assert "HTTP 500" in caplog.text and "topic-abc" not in caplog.text
 
 
-def test_usage_alerts_compare_with_the_stored_reading(settings, tmp_path):
+def test_usage_alerts_once_and_retry_after_a_failed_send(settings, tmp_path):
     store = Store(tmp_path / "a.db")
     s = _alert_settings(settings)
-    store.add_usage([w(79).to_dict(), w(95, window="5 hours").to_dict()], ts=time.time() - 60)
+    down, tr_down = _recorder(status=503)
+    assert asyncio.run(usage_alerts(store, s, [w(82)], transport=tr_down, retry_gap_s=0)) == 0
+    assert len(down) == 3
     got, tr = _recorder()
-    new = [w(82), w(97, window="5 hours"), w(81, provider="claude")]
-    assert asyncio.run(usage_alerts(store, s, new, transport=tr)) == 2
-    store.add_usage([x.to_dict() for x in new])
-    assert asyncio.run(usage_alerts(store, s, [w(84)], transport=tr)) == 0
+    new = [w(83), w(97, window="5 hours"), w(81, provider="claude")]
+    assert asyncio.run(usage_alerts(store, s, new, transport=tr)) == 2   # the retry + claude
+    # A restart, or a reading without the weekly window, sends nothing again.
+    assert asyncio.run(usage_alerts(Store(tmp_path / "a.db"), s, [w(85)], transport=tr)) == 0
+    assert asyncio.run(usage_alerts(store, s, [w(10, window="5 hours")], transport=tr)) == 0
+    assert asyncio.run(usage_alerts(store, s, [w(86)], transport=tr)) == 0
     assert len(got) == 2
+
+
+def test_httpx_request_log_hides_the_address(settings, caplog):
+    import logging
+    caplog.set_level(logging.INFO)
+    got, tr = _recorder()
+    assert asyncio.run(send(_alert_settings(settings), "T", "b", transport=tr))
+    rec = logging.LogRecord("httpx", logging.INFO, "", 0, 'HTTP Request: %s %s "%s"',
+                            ("POST", httpx.URL(URL + "?auth=x"), "200"), None)
+    assert not logging.getLogger("httpx").filters[0].filter(rec)
+    assert "topic-abc" not in caplog.text
+
+
+def test_bad_address_never_raises_or_logs_it(settings, caplog):
+    s = settings.with_layer("flag", {"alerts.url": "https://ntfy.example:abc/topic-abc"})
+    assert not asyncio.run(send(s, "T", "b", retry_gap_s=0))
+    assert "topic-abc" not in caplog.text
 
 
 def test_no_address_no_alert(settings, tmp_path):
@@ -88,7 +117,10 @@ def test_no_address_no_alert(settings, tmp_path):
 
 
 @pytest.mark.parametrize("bad", [{"alerts.usage_percent": 101}, {"alerts.usage_percent": -1},
-                                 {"alerts.url": "ntfy.sh/topic"}])
+                                 {"alerts.url": "ntfy.sh/topic"},
+                                 {"alerts.url": "https://ntfy.sh:abc/topic"},
+                                 {"alerts.url": "https:///topic"}])
 def test_bad_alert_settings(settings, bad):
-    with pytest.raises(ConfigError):
+    with pytest.raises(ConfigError) as e:
         validate(settings.with_layer("flag", bad))
+    assert "topic" not in str(e.value)
