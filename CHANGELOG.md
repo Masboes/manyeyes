@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-11-26
+
 ### Added
 - Quota alerts. When a plan window of a day or longer (such as the weekly window) of a reviewer login reaches `alerts.usage_percent` (default 80), the server sends one alert to `alerts.url`: plain text with a `Title` header, the form that ntfy takes. Without `alerts.url`, nothing is sent. `manyeyes test-alert` sends a test alert.
 
