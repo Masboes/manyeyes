@@ -153,7 +153,8 @@ KEYS: tuple[Key, ...] = (
         "Empty: no alerts. A secret: anyone with an ntfy topic can read it.", secret=True),
     Key("alerts.usage_percent", int, 80, "Server: send an alert when a plan window of a day or "
         "longer (such as the weekly window) of a reviewer login reaches this percent. "
-        "Once per window period; again after a reset, or after a drop of 5 points. 0: off.", editable=True),
+        "Once per window period; again after a reset, or after the window drops to 5 points "
+        "below this percent. 0: off.", editable=True),
     Key("retention.days", int, 0, "Delete jobs older than this. 0 keeps everything."),
     Key("retention.keep_telemetry", bool, True, "Keep reviewer telemetry when deleting jobs."),
 )

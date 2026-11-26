@@ -66,6 +66,7 @@ def test_send_posts_plain_text_with_title(settings):
     s = _alert_settings(settings, **{"server.public_urls": ["https://x.example/me"]})
     assert asyncio.run(send(s, "T", "body", transport=tr))
     assert got[0].headers["Title"] == "T" and got[0].content == b"body"
+    assert got[0].headers["Content-Type"].startswith("text/plain")
     assert got[0].headers["Click"] == "https://x.example/me"
 
 
@@ -127,14 +128,34 @@ def test_bad_alert_settings(settings, bad):
     assert "topic" not in str(e.value)
 
 
-def test_record_without_reset_time_gets_one_and_a_new_period_alerts(settings, tmp_path):
-    store = Store(tmp_path / "a.db")
-    s = _alert_settings(settings)
+def test_record_without_reset_time_rearms_in_a_new_period():
+    now = 1_000_000.0
+    st = {K: {"resets_at": None, "alerted_at": now}}
+    same = w(84, resets_at=now + 6 * 86400)        # this period began before the alert
+    nxt = w(84, resets_at=now + 8 * 86400)         # this period began after the alert
+    assert plan([same], st, 80) == ([], [])
+    assert plan([nxt], st, 80) == ([nxt], [K])
+
+
+def test_low_threshold_rearms_at_zero():
+    assert plan([w(0)], {K: {"resets_at": None}}, 4) == ([], [K])
+
+
+def test_relative_url_in_a_debug_line_is_hidden(settings):
+    import logging
     got, tr = _recorder()
-    assert asyncio.run(usage_alerts(store, s, [w(82)], transport=tr)) == 1
-    assert asyncio.run(usage_alerts(store, s, [w(84, resets_at=86400)], transport=tr)) == 0
-    assert store.alert_states()[K]["resets_at"] == 86400
-    assert asyncio.run(usage_alerts(store, s, [w(81, resets_at=8 * 86400)], transport=tr)) == 1
+    asyncio.run(send(_alert_settings(settings), "T", "b", transport=tr))
+    rec = logging.LogRecord("httpcore.http11", logging.DEBUG, "", 0,
+                            "headers=[(b'Location', b'/topic-abc?x=1')]", (), None)
+    assert not logging.getLogger("httpcore.http11").filters[0].filter(rec)
+
+
+def test_a_failed_record_write_does_not_stop_the_others(settings, tmp_path, monkeypatch):
+    store = Store(tmp_path / "a.db")
+    monkeypatch.setattr(store, "set_alert", lambda *a: (_ for _ in ()).throw(OSError("x")))
+    got, tr = _recorder()
+    new = [w(90), w(90, provider="claude")]
+    assert asyncio.run(usage_alerts(store, _alert_settings(settings), new, transport=tr)) == 2
 
 
 def test_every_window_gets_its_tries(settings, tmp_path):
@@ -148,5 +169,5 @@ def test_every_window_gets_its_tries(settings, tmp_path):
 def test_non_ascii_title_is_encoded(settings):
     got, tr = _recorder()
     s = _alert_settings(settings, **{"server.public_urls": ["https://bücher.example/m"]})
-    assert asyncio.run(send(s, "week (Modèle)", "b", transport=tr))
+    assert asyncio.run(send(s, "week (Modèle)\nx", "b", transport=tr))
     assert got[0].headers["Title"].startswith("=?UTF-8?B?") and "Click" not in got[0].headers

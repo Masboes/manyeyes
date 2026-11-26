@@ -5,8 +5,10 @@ day or longer reaches `alerts.usage_percent`, one alert goes to `alerts.url`:
 plain text with a `Title` header, the form that ntfy takes.
 
 **One alert per window period.** The table `alert_state` records each window
-that has had its alert. The record goes when the window drops 5 points below
-the line, or when its reset time moves on by more than 12 hours (a new period).
+that has had its alert. The record goes when the window drops to 5 points below
+the line, or when a new period begins: the reset time moves on by more than 12
+hours, or (for a record without a reset time) the alert came before the start
+of the period that the reading shows.
 So a restart, a reading that lacks the window, or a reading that fails sends
 nothing again. A send that fails records nothing: the next reading tries again.
 A send whose answer is lost (a timeout after the address took it, or a crash
@@ -61,11 +63,15 @@ for _name in ("httpx", "httpcore.connection", "httpcore.http11", "httpcore.http2
 
 
 def _hide(url: str) -> None:
+    """Hide the parts of the address that carry the secret: the path (the ntfy
+    topic) and the query, also when a log line shows them without the host."""
+    from urllib.parse import urlsplit
     try:
-        bare = str(httpx.URL(url).copy_with(query=None, fragment=None))
-    except Exception:  # noqa: BLE001 - a bad URL is never logged by httpx either
-        bare = url
-    _HideSecretUrls.urls.update({bare, url.split("?", 1)[0]})
+        u = urlsplit(url)
+        parts = {p for p in (u.path, u.query) if len(p) > 1}
+    except ValueError:
+        parts = set()
+    _HideSecretUrls.urls.update(parts or {url})
 
 
 def window_minutes(name: str) -> int | None:
@@ -92,9 +98,12 @@ def plan(windows: list[Window], states: dict[tuple[str, str, str], dict],
         key = (w.provider, w.login, w.window)
         st = states.get(key)
         if st is not None:
-            new_period = (w.resets_at and st.get("resets_at")
-                          and w.resets_at > st["resets_at"] + NEW_PERIOD_S)
-            if w.used_percent <= threshold - REARM_POINTS or new_period:
+            if st.get("resets_at"):
+                new_period = bool(w.resets_at) and w.resets_at > st["resets_at"] + NEW_PERIOD_S
+            else:   # the alert has no reset time: did it come before this period began?
+                start = (w.resets_at or 0) - 60 * (window_minutes(w.window) or 0)
+                new_period = bool(w.resets_at) and st["alerted_at"] < start
+            if w.used_percent <= max(0.0, threshold - REARM_POINTS) or new_period:
                 clear.append(key)
                 st = None
         if st is None and w.used_percent >= threshold:
@@ -104,6 +113,7 @@ def plan(windows: list[Window], states: dict[tuple[str, str, str], dict],
 
 def _header(value: str) -> str:
     """HTTP headers are ASCII. ntfy decodes RFC 2047 for anything else."""
+    value = "".join(c if c.isprintable() else " " for c in value)
     if value.isascii():
         return value
     return "=?UTF-8?B?" + base64.b64encode(value.encode()).decode() + "?="
@@ -127,6 +137,14 @@ def message(w: Window, now: float | None = None) -> tuple[str, str]:
     return title, body
 
 
+async def _post(url: str, body: str, headers: dict[str, str],
+                transport: httpx.AsyncBaseTransport | None) -> int:
+    """The status only: the body is never read, so a slow body cannot hold a send."""
+    async with httpx.AsyncClient(timeout=SEND_TIMEOUT_S, transport=transport) as c:
+        async with c.stream("POST", url, content=body.encode(), headers=headers) as r:
+            return r.status_code
+
+
 async def send(settings: Settings, title: str, body: str, *,
                transport: httpx.AsyncBaseTransport | None = None,
                retry_gap_s: float = RETRY_GAP_S) -> bool:
@@ -135,17 +153,17 @@ async def send(settings: Settings, title: str, body: str, *,
     if not url:
         return False
     _hide(url)
-    headers = {"Title": _header(title), "Tags": "warning"}
+    headers = {"Title": _header(title), "Tags": "warning",
+               "Content-Type": "text/plain; charset=utf-8"}
     public = settings["server.public_urls"]
     if public and public[0].isascii():
         headers["Click"] = public[0]
     for attempt in range(1, SEND_TRIES + 1):
         try:
-            async with httpx.AsyncClient(timeout=SEND_TIMEOUT_S, transport=transport) as c:
-                r = await c.post(url, content=body.encode(), headers=headers)
-            if r.is_success:
+            status = await asyncio.wait_for(_post(url, body, headers, transport), SEND_TIMEOUT_S)
+            if 200 <= status < 300:
                 return True
-            why = f"HTTP {r.status_code}"
+            why = f"HTTP {status}"
         except Exception as e:  # noqa: BLE001 - the message can contain the address
             why = type(e).__name__
         log.warning("alert not sent (try %d of %d): %s", attempt, SEND_TRIES, why)
@@ -165,15 +183,13 @@ async def usage_alerts(store: Store, settings: Settings, windows: list[Window], 
     to_send, to_clear = plan(windows, states, threshold)
     for key in to_clear:
         store.clear_alert(*key)
-    for w in windows:   # a record without a reset time gets the first one seen
-        st = states.get((w.provider, w.login, w.window))
-        if st and st.get("resets_at") is None and w.resets_at and not w.error:
-            store.backfill_alert_reset(w.provider, w.login, w.window, w.resets_at)
-
     async def one(w: Window) -> bool:
-        if await send(settings, *message(w), transport=transport, retry_gap_s=retry_gap_s):
+        if not await send(settings, *message(w), transport=transport, retry_gap_s=retry_gap_s):
+            return False
+        try:
             store.set_alert(w.provider, w.login, w.window, w.resets_at)
-            return True
-        return False
+        except Exception as e:  # noqa: BLE001 - the others still finish
+            log.warning("alert sent, record not written: %s", type(e).__name__)
+        return True
     # At the same time: a slow address never leaves a later window without a try.
     return sum(await asyncio.gather(*(one(w) for w in to_send)))

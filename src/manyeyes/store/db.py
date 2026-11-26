@@ -358,11 +358,6 @@ class Store:
                     "resets_at) VALUES (?,?,?,?,?)",
                     (provider, login, window, time.time(), resets_at))
 
-    def backfill_alert_reset(self, provider: str, login: str, window: str,
-                             resets_at: float) -> None:
-        self._write("UPDATE alert_state SET resets_at=? WHERE provider=? AND login=? AND "
-                    "window=? AND resets_at IS NULL", (resets_at, provider, login, window))
-
     def clear_alert(self, provider: str, login: str, window: str) -> None:
         self._write("DELETE FROM alert_state WHERE provider=? AND login=? AND window=?",
                     (provider, login, window))
