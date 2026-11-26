@@ -71,10 +71,10 @@ def test_send_posts_plain_text_with_title(settings):
 
 
 def test_failed_send_retries_and_never_logs_the_address(settings, caplog):
-    got, tr = _recorder(status=500)
+    got, tr = _recorder(status=503)
     ok = asyncio.run(send(_alert_settings(settings), "T", "b", transport=tr, retry_gap_s=0))
     assert not ok and len(got) == 3
-    assert "HTTP 500" in caplog.text and "topic-abc" not in caplog.text
+    assert "HTTP 503" in caplog.text and "topic-abc" not in caplog.text
 
 
 def test_usage_alerts_once_and_retry_after_a_failed_send(settings, tmp_path):
@@ -93,15 +93,21 @@ def test_usage_alerts_once_and_retry_after_a_failed_send(settings, tmp_path):
     assert len(got) == 2
 
 
-def test_httpx_request_log_hides_the_address(settings, caplog):
+def test_httpx_lines_of_an_alert_send_are_dropped(settings, caplog):
     import logging
-    caplog.set_level(logging.INFO)
+    caplog.set_level(logging.DEBUG)
     got, tr = _recorder()
-    assert asyncio.run(send(_alert_settings(settings), "T", "b", transport=tr))
-    rec = logging.LogRecord("httpx", logging.INFO, "", 0, 'HTTP Request: %s %s "%s"',
-                            ("POST", httpx.URL(URL + "?auth=x"), "200"), None)
-    assert not logging.getLogger("httpx").filters[0].filter(rec)
-    assert "topic-abc" not in caplog.text
+    s = _alert_settings(settings, **{"alerts.url": "https://ntfy.example/a/../topic-abc?k=v"})
+    assert asyncio.run(send(s, "T", "b", transport=tr))
+    assert got and "topic-abc" not in caplog.text
+    # Lines of other requests stay.
+    asyncio.run(_other_request(tr))
+    assert "HTTP Request: GET https://other.example/api" in caplog.text
+
+
+async def _other_request(tr):
+    async with httpx.AsyncClient(transport=tr) as c:
+        await c.get("https://other.example/api")
 
 
 def test_bad_address_never_raises_or_logs_it(settings, caplog):
@@ -121,7 +127,8 @@ def test_no_address_no_alert(settings, tmp_path):
                                  {"alerts.url": "ntfy.sh/topic"},
                                  {"alerts.url": "https://ntfy.sh:abc/topic"},
                                  {"alerts.url": "https:///topic"},
-                                 {"alerts.url": "https://ntfy.sh:0/topic"}])
+                                 {"alerts.url": "https://ntfy.sh:0/topic"},
+                                 {"alerts.url": "https://ntfy.sh/to\tpic"}])
 def test_bad_alert_settings(settings, bad):
     with pytest.raises(ConfigError) as e:
         validate(settings.with_layer("flag", bad))
@@ -141,13 +148,20 @@ def test_low_threshold_rearms_at_zero():
     assert plan([w(0)], {K: {"resets_at": None}}, 4) == ([], [K])
 
 
-def test_relative_url_in_a_debug_line_is_hidden(settings):
-    import logging
-    got, tr = _recorder()
-    asyncio.run(send(_alert_settings(settings), "T", "b", transport=tr))
-    rec = logging.LogRecord("httpcore.http11", logging.DEBUG, "", 0,
-                            "headers=[(b'Location', b'/topic-abc?x=1')]", (), None)
-    assert not logging.getLogger("httpcore.http11").filters[0].filter(rec)
+def test_reading_without_reset_time_after_the_stored_reset_rearms():
+    st = {K: {"resets_at": 1000.0, "alerted_at": 0.0}}
+    assert plan([w(84)], st, 80, now=1000.0 + 3600) == ([], [])
+    assert plan([w(84)], st, 80, now=1000.0 + 13 * 3600) == ([w(84)], [K])
+
+
+def test_one_alert_per_key_in_one_reading():
+    assert plan([w(90), w(91)], {}, 80) == ([w(90)], [])
+
+
+def test_wrong_address_is_not_retried(settings):
+    got, tr = _recorder(status=404)
+    assert not asyncio.run(send(_alert_settings(settings), "T", "b", transport=tr, retry_gap_s=0))
+    assert len(got) == 1
 
 
 def test_a_failed_record_write_does_not_stop_the_others(settings, tmp_path, monkeypatch):

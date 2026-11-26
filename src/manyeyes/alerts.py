@@ -18,12 +18,13 @@ Windows shorter than a day do not alert: they reset soon, and a login that hits
 one rests by itself (logins.py).
 
 **The address is a secret** (anyone with an ntfy topic can read it). No log line
-of this module names it, and a filter keeps httpx's request log from naming it.
+of this module names it, and a filter drops httpx's log lines of an alert send.
 """
 from __future__ import annotations
 
 import asyncio
 import base64
+import contextvars
 import logging
 import re
 import time
@@ -47,31 +48,21 @@ _DURATION = re.compile(r"^(\d+) (min|hours|days)\b")
 _MINUTES = {"min": 1, "hours": 60, "days": 1440}
 
 
-class _HideSecretUrls(logging.Filter):
-    """Drops httpx's "HTTP Request: POST <url>" line for an alert address."""
-    urls: set[str] = set()
+_SENDING: contextvars.ContextVar[bool] = contextvars.ContextVar("alert_send", default=False)
+
+
+class _QuietWhileSending(logging.Filter):
+    """Drops every httpx and httpcore line of an alert send: they show its URL.
+    httpx logs in the task that sends, so the context variable marks the lines."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        return not any(u in msg for u in self.urls)
+        return not _SENDING.get()
 
 
 # A filter works on the records of its own logger only, so each one gets it.
 for _name in ("httpx", "httpcore.connection", "httpcore.http11", "httpcore.http2",
               "httpcore.proxy"):
-    logging.getLogger(_name).addFilter(_HideSecretUrls())
-
-
-def _hide(url: str) -> None:
-    """Hide the parts of the address that carry the secret: the path (the ntfy
-    topic) and the query, also when a log line shows them without the host."""
-    from urllib.parse import urlsplit
-    try:
-        u = urlsplit(url)
-        parts = {p for p in (u.path, u.query) if len(p) > 1}
-    except ValueError:
-        parts = set()
-    _HideSecretUrls.urls.update(parts or {url})
+    logging.getLogger(_name).addFilter(_QuietWhileSending())
 
 
 def window_minutes(name: str) -> int | None:
@@ -87,27 +78,32 @@ def long_window(name: str) -> bool:
 
 
 def plan(windows: list[Window], states: dict[tuple[str, str, str], dict],
-         threshold: float) -> tuple[list[Window], list[tuple[str, str, str]]]:
+         threshold: float, now: float | None = None,
+         ) -> tuple[list[Window], list[tuple[str, str, str]]]:
     """(windows to alert, records to clear) for one reading."""
     if threshold <= 0:
         return [], []
-    send, clear = [], []
+    now = time.time() if now is None else now
+    send, clear, seen = [], [], set()
     for w in windows:
         if w.error or w.used_percent is None or not long_window(w.window):
             continue
         key = (w.provider, w.login, w.window)
         st = states.get(key)
         if st is not None:
-            if st.get("resets_at"):
-                new_period = bool(w.resets_at) and w.resets_at > st["resets_at"] + NEW_PERIOD_S
+            if st.get("resets_at") and not w.resets_at:   # the reading has no reset time
+                new_period = now > st["resets_at"] + NEW_PERIOD_S
+            elif st.get("resets_at"):
+                new_period = w.resets_at > st["resets_at"] + NEW_PERIOD_S
             else:   # the alert has no reset time: did it come before this period began?
                 start = (w.resets_at or 0) - 60 * (window_minutes(w.window) or 0)
                 new_period = bool(w.resets_at) and st["alerted_at"] < start
             if w.used_percent <= max(0.0, threshold - REARM_POINTS) or new_period:
                 clear.append(key)
                 st = None
-        if st is None and w.used_percent >= threshold:
+        if st is None and w.used_percent >= threshold and key not in seen:
             send.append(w)
+            seen.add(key)
     return send, clear
 
 
@@ -140,9 +136,13 @@ def message(w: Window, now: float | None = None) -> tuple[str, str]:
 async def _post(url: str, body: str, headers: dict[str, str],
                 transport: httpx.AsyncBaseTransport | None) -> int:
     """The status only: the body is never read, so a slow body cannot hold a send."""
-    async with httpx.AsyncClient(timeout=SEND_TIMEOUT_S, transport=transport) as c:
-        async with c.stream("POST", url, content=body.encode(), headers=headers) as r:
-            return r.status_code
+    token = _SENDING.set(True)
+    try:
+        async with httpx.AsyncClient(timeout=SEND_TIMEOUT_S, transport=transport) as c:
+            async with c.stream("POST", url, content=body.encode(), headers=headers) as r:
+                return r.status_code
+    finally:
+        _SENDING.reset(token)
 
 
 async def send(settings: Settings, title: str, body: str, *,
@@ -152,7 +152,6 @@ async def send(settings: Settings, title: str, body: str, *,
     url = settings["alerts.url"]
     if not url:
         return False
-    _hide(url)
     headers = {"Title": _header(title), "Tags": "warning",
                "Content-Type": "text/plain; charset=utf-8"}
     public = settings["server.public_urls"]
@@ -164,6 +163,10 @@ async def send(settings: Settings, title: str, body: str, *,
             if 200 <= status < 300:
                 return True
             why = f"HTTP {status}"
+            if status != 429 and status < 500:   # a wrong address: a retry gives the same
+                log.warning("alert not sent: %s (a redirect is not followed: use the final "
+                            "address)" if 300 <= status < 400 else "alert not sent: %s", why)
+                return False
         except Exception as e:  # noqa: BLE001 - the message can contain the address
             why = type(e).__name__
         log.warning("alert not sent (try %d of %d): %s", attempt, SEND_TRIES, why)
@@ -179,10 +182,12 @@ async def usage_alerts(store: Store, settings: Settings, windows: list[Window], 
     threshold = float(settings["alerts.usage_percent"])
     if not settings["alerts.url"] or threshold <= 0:
         return 0
-    states = store.alert_states()
-    to_send, to_clear = plan(windows, states, threshold)
+    to_send, to_clear = plan(windows, store.alert_states(), threshold)
     for key in to_clear:
-        store.clear_alert(*key)
+        try:
+            store.clear_alert(*key)
+        except Exception as e:  # noqa: BLE001 - the other windows still go
+            log.warning("alert record not cleared: %s", type(e).__name__)
     async def one(w: Window) -> bool:
         if not await send(settings, *message(w), transport=transport, retry_gap_s=retry_gap_s):
             return False

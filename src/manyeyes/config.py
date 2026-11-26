@@ -371,6 +371,8 @@ def load(
 def _check_alert_url(url: str) -> None:
     """An error never repeats the address: it is a secret."""
     from urllib.parse import urlsplit
+    if any(c.isspace() or not c.isprintable() for c in url):
+        raise ConfigError("alerts.url must not contain spaces or control characters")
     try:
         u = urlsplit(url)
         ok = u.scheme in ("https", "http") and bool(u.hostname) and (u.port is None or u.port > 0)
