@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- Quota alerts. When a plan window of a day or longer (such as the weekly window) of a reviewer login reaches `alerts.usage_percent` (default 80), the server sends one alert to `alerts.url`: plain text with a `Title` header, the form that ntfy takes. Without `alerts.url`, nothing is sent. `manyeyes test-alert` sends a test alert.
+
+### Notes
+- Measured quota of Codex fast mode: in one week on a live server, 948 `gpt-6.2-sol` fast reviewers used 86% of a Pro week, about 0.09% each. A full review with 4 Codex reviewers is then about 0.36%, about 275 full reviews a week. This is in the 200–330 range that 1.6.2 estimated.
+
 ## [1.6.2] — 2026-11-18
 
 ### Added

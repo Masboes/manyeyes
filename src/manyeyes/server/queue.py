@@ -345,11 +345,14 @@ class Worker:
             await asyncio.sleep(12 * 3600)
 
     async def _usage_loop(self) -> None:
+        from ..alerts import usage_alerts
         from ..usage import probe
         while (minutes := int(self.base["usage.interval_min"])) > 0:
             try:
                 windows = await probe(self.base)
                 if windows:
+                    s = effective_settings(self.base, self.store)
+                    await usage_alerts(self.store, s, windows)
                     self.store.add_usage([w.to_dict() for w in windows])
                 self.store.prune_usage(time.time() - 30 * 86400)
             except Exception:  # noqa: BLE001 - never let the loop die
