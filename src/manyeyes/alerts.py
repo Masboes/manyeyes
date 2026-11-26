@@ -201,10 +201,11 @@ async def usage_alerts(store: Store, settings: Settings, windows: list[Window], 
         except Exception as e:  # noqa: BLE001 - the other windows still go
             log.warning("alert record not cleared: %s", type(e).__name__)
     async def one(w: Window) -> bool:
+        # Decided before the send: a send can end after the reset.
+        reset = w.resets_at if w.resets_at and w.resets_at > time.time() else None
         if not await send(settings, *message(w), transport=transport, retry_gap_s=retry_gap_s):
             return False
         try:
-            reset = w.resets_at if w.resets_at and w.resets_at > time.time() else None
             store.set_alert(w.provider, w.login, w.window, reset)
         except Exception as e:  # noqa: BLE001 - the others still finish
             log.warning("alert sent, record not written: %s", type(e).__name__)
