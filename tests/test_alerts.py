@@ -216,3 +216,14 @@ def test_a_past_reset_time_counts_as_unknown():
     assert plan([w(84, resets_at=500.0)], st, 80, now=2000.0) == ([], [], [])
     # After the full window, the age fallback rearms in spite of the stale reset.
     assert plan([w(84, resets_at=500.0)], st, 80, now=1000.0 + 8 * 86400)[0] == [w(84, resets_at=500.0)]
+
+
+def test_a_past_reset_is_stored_as_unknown_and_alerts_once(settings, tmp_path):
+    store = Store(tmp_path / "a.db")
+    s = _alert_settings(settings)
+    got, tr = _recorder()
+    stale = w(84, resets_at=time.time() - 13 * 3600)
+    assert asyncio.run(usage_alerts(store, s, [stale], transport=tr)) == 1
+    assert store.alert_states()[K]["resets_at"] is None
+    assert asyncio.run(usage_alerts(store, s, [stale], transport=tr)) == 0
+    assert "resets in" not in message(stale)[1]

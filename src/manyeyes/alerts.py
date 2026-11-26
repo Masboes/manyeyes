@@ -135,7 +135,7 @@ def message(w: Window, now: float | None = None) -> tuple[str, str]:
     who = w.provider if w.login == "default" else f"{w.provider}@{w.login}"
     title = f"manyeyes: {who} {w.window} quota at {w.used_percent:.0f}%"
     body = f"The {w.window} window of the {who} login is {w.used_percent:.0f}% used."
-    if w.resets_at:
+    if w.resets_at and w.resets_at > now:
         body += f" It resets in {_left(w.resets_at - now)}."
     return title, body
 
@@ -204,7 +204,8 @@ async def usage_alerts(store: Store, settings: Settings, windows: list[Window], 
         if not await send(settings, *message(w), transport=transport, retry_gap_s=retry_gap_s):
             return False
         try:
-            store.set_alert(w.provider, w.login, w.window, w.resets_at)
+            reset = w.resets_at if w.resets_at and w.resets_at > time.time() else None
+            store.set_alert(w.provider, w.login, w.window, reset)
         except Exception as e:  # noqa: BLE001 - the others still finish
             log.warning("alert sent, record not written: %s", type(e).__name__)
         return True
