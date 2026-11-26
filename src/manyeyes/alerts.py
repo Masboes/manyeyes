@@ -8,7 +8,8 @@ plain text with a `Title` header, the form that ntfy takes.
 that has had its alert. The record goes when the window drops to 5 points below
 the line, or when a new period begins: the reset time moves on by more than 12
 hours, or (for a record without a reset time) the alert came before the start
-of the period that the reading shows.
+of the period that the reading shows, or (no reset time at all) the alert is
+older than the window.
 So a restart, a reading that lacks the window, or a reading that fails sends
 nothing again. A send that fails records nothing: the next reading tries again.
 A send whose answer is lost (a timeout after the address took it, or a crash
@@ -61,7 +62,7 @@ class _QuietWhileSending(logging.Filter):
 
 # A filter works on the records of its own logger only, so each one gets it.
 for _name in ("httpx", "httpcore.connection", "httpcore.http11", "httpcore.http2",
-              "httpcore.proxy"):
+              "httpcore.proxy", "httpcore.socks"):
     logging.getLogger(_name).addFilter(_QuietWhileSending())
 
 
@@ -79,12 +80,12 @@ def long_window(name: str) -> bool:
 
 def plan(windows: list[Window], states: dict[tuple[str, str, str], dict],
          threshold: float, now: float | None = None,
-         ) -> tuple[list[Window], list[tuple[str, str, str]]]:
-    """(windows to alert, records to clear) for one reading."""
+         ) -> tuple[list[Window], list[tuple[str, str, str]], list[Window]]:
+    """(windows to alert, records to clear, records to give a reset time) for one reading."""
     if threshold <= 0:
-        return [], []
+        return [], [], []
     now = time.time() if now is None else now
-    send, clear, seen = [], [], set()
+    send, clear, backfill, seen = [], [], [], set()
     for w in windows:
         if w.error or w.used_percent is None or not long_window(w.window):
             continue
@@ -98,13 +99,18 @@ def plan(windows: list[Window], states: dict[tuple[str, str, str], dict],
             else:   # the alert has no reset time: did it come before this period began?
                 start = (w.resets_at or 0) - 60 * (window_minutes(w.window) or 0)
                 new_period = bool(w.resets_at) and st["alerted_at"] < start
+                if w.resets_at and not new_period:
+                    backfill.append(w)
+            # No reset time ever: an alert older than the window is from an earlier period.
+            new_period = new_period or (
+                now > st.get("alerted_at", now) + 60 * (window_minutes(w.window) or 0))
             if w.used_percent <= max(0.0, threshold - REARM_POINTS) or new_period:
                 clear.append(key)
                 st = None
         if st is None and w.used_percent >= threshold and key not in seen:
             send.append(w)
             seen.add(key)
-    return send, clear
+    return send, clear, backfill
 
 
 def _header(value: str) -> str:
@@ -155,7 +161,7 @@ async def send(settings: Settings, title: str, body: str, *,
     headers = {"Title": _header(title), "Tags": "warning",
                "Content-Type": "text/plain; charset=utf-8"}
     public = settings["server.public_urls"]
-    if public and public[0].isascii():
+    if public and isinstance(public[0], str) and public[0].isascii() and public[0].isprintable():
         headers["Click"] = public[0]
     for attempt in range(1, SEND_TRIES + 1):
         try:
@@ -182,7 +188,12 @@ async def usage_alerts(store: Store, settings: Settings, windows: list[Window], 
     threshold = float(settings["alerts.usage_percent"])
     if not settings["alerts.url"] or threshold <= 0:
         return 0
-    to_send, to_clear = plan(windows, store.alert_states(), threshold)
+    to_send, to_clear, to_backfill = plan(windows, store.alert_states(), threshold)
+    for w in to_backfill:
+        try:
+            store.backfill_alert_reset(w.provider, w.login, w.window, w.resets_at)
+        except Exception as e:  # noqa: BLE001
+            log.warning("alert record not updated: %s", type(e).__name__)
     for key in to_clear:
         try:
             store.clear_alert(*key)

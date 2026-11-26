@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import httpx
 import pytest
@@ -28,18 +29,18 @@ K = ("codex", "default", "week")
 
 
 def test_plan_alerts_once_per_period():
-    assert plan([w(81)], {}, 80) == ([w(81)], [])
-    assert plan([w(85)], {K: {"resets_at": None}}, 80) == ([], [])       # already sent
-    assert plan([w(77)], {K: {"resets_at": None}}, 80) == ([], [])       # inside the 5 points
-    assert plan([w(75)], {K: {"resets_at": None}}, 80) == ([], [K])      # dropped 5: rearm
+    assert plan([w(81)], {}, 80) == ([w(81)], [], [])
+    assert plan([w(85)], {K: {"resets_at": None}}, 80) == ([], [], [])   # already sent
+    assert plan([w(77)], {K: {"resets_at": None}}, 80) == ([], [], [])   # inside the 5 points
+    assert plan([w(75)], {K: {"resets_at": None}}, 80) == ([], [K], [])  # dropped 5: rearm
     # A reset between two readings that are both above the line.
     nxt = w(82, resets_at=8 * 86400)
-    assert plan([nxt], {K: {"resets_at": 86400}}, 80) == ([nxt], [K])
+    assert plan([nxt], {K: {"resets_at": 86400}}, 80) == ([nxt], [K], [])
     # A reset time that drifts by half an hour is the same period.
-    assert plan([w(86, resets_at=86400 + 1800)], {K: {"resets_at": 86400}}, 80) == ([], [])
-    assert plan([w(90, window="5 hours")], {}, 80) == ([], [])
-    assert plan([w(None, error="boom")], {}, 80) == ([], [])
-    assert plan([w(99)], {}, 0) == ([], [])
+    assert plan([w(86, resets_at=86400 + 1800)], {K: {"resets_at": 86400}}, 80) == ([], [], [])
+    assert plan([w(90, window="5 hours")], {}, 80) == ([], [], [])
+    assert plan([w(None, error="boom")], {}, 80) == ([], [], [])
+    assert plan([w(99)], {}, 0) == ([], [], [])
 
 
 def test_message_names_login_and_reset():
@@ -140,22 +141,22 @@ def test_record_without_reset_time_rearms_in_a_new_period():
     st = {K: {"resets_at": None, "alerted_at": now}}
     same = w(84, resets_at=now + 6 * 86400)        # this period began before the alert
     nxt = w(84, resets_at=now + 8 * 86400)         # this period began after the alert
-    assert plan([same], st, 80) == ([], [])
-    assert plan([nxt], st, 80) == ([nxt], [K])
+    assert plan([same], st, 80, now=now) == ([], [], [same])   # same period: learn the reset
+    assert plan([nxt], st, 80, now=now) == ([nxt], [K], [])
 
 
 def test_low_threshold_rearms_at_zero():
-    assert plan([w(0)], {K: {"resets_at": None}}, 4) == ([], [K])
+    assert plan([w(0)], {K: {"resets_at": None}}, 4) == ([], [K], [])
 
 
 def test_reading_without_reset_time_after_the_stored_reset_rearms():
     st = {K: {"resets_at": 1000.0, "alerted_at": 0.0}}
-    assert plan([w(84)], st, 80, now=1000.0 + 3600) == ([], [])
-    assert plan([w(84)], st, 80, now=1000.0 + 13 * 3600) == ([w(84)], [K])
+    assert plan([w(84)], st, 80, now=1000.0 + 3600) == ([], [], [])
+    assert plan([w(84)], st, 80, now=1000.0 + 13 * 3600) == ([w(84)], [K], [])
 
 
 def test_one_alert_per_key_in_one_reading():
-    assert plan([w(90), w(91)], {}, 80) == ([w(90)], [])
+    assert plan([w(90), w(91)], {}, 80) == ([w(90)], [], [])
 
 
 def test_wrong_address_is_not_retried(settings):
@@ -185,3 +186,19 @@ def test_non_ascii_title_is_encoded(settings):
     s = _alert_settings(settings, **{"server.public_urls": ["https://bücher.example/m"]})
     assert asyncio.run(send(s, "week (Modèle)\nx", "b", transport=tr))
     assert got[0].headers["Title"].startswith("=?UTF-8?B?") and "Click" not in got[0].headers
+
+
+def test_alert_without_any_reset_time_expires_after_the_window():
+    st = {K: {"resets_at": None, "alerted_at": 0.0}}
+    assert plan([w(84)], st, 80, now=6 * 86400)[0] == []
+    assert plan([w(84)], st, 80, now=8 * 86400)[0] == [w(84)]
+
+
+def test_reset_time_learned_later_is_saved(settings, tmp_path):
+    store = Store(tmp_path / "a.db")
+    s = _alert_settings(settings)
+    got, tr = _recorder()
+    assert asyncio.run(usage_alerts(store, s, [w(82)], transport=tr)) == 1
+    later = time.time() + 5 * 86400
+    assert asyncio.run(usage_alerts(store, s, [w(84, resets_at=later)], transport=tr)) == 0
+    assert store.alert_states()[K]["resets_at"] == later
