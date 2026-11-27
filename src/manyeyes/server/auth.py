@@ -76,6 +76,13 @@ class Allowlist:
 class Caller:
     login: str
     via: str   # session | token | bootstrap | mcp-oauth
+    token_id: str | None = None     # the API token that made the call
+    token_name: str | None = None
+
+    def job_fields(self) -> dict[str, str | None]:
+        """Who sent a job: the login, and the token when one was used."""
+        return {"requested_by": self.login, "token_id": self.token_id,
+                "token_name": self.token_name}
 
 
 class Auth:
@@ -121,27 +128,28 @@ class Auth:
 
     # -- tokens -----------------------------------------------------------
 
-    def token_login(self, token: str) -> tuple[str, str] | None:
-        """(login, via) for a valid API or bootstrap token."""
+    def token_login(self, token: str) -> Caller | None:
+        """The caller of a valid API or bootstrap token."""
         boot = self.s["auth.bootstrap_token"]
         if boot and hmac.compare_digest(token.encode(), boot.encode()):
             login = self.s["auth.bootstrap_login"]
-            return (login, "bootstrap") if self.allowlist.allows(login) else None
+            if not self.allowlist.allows(login):
+                return None
+            return Caller(login, "bootstrap", "bootstrap", "bootstrap token")
         if not token.startswith(TOKEN_PREFIX):
             return None
         row = self.store.token_by_hash(hash_token(token))
         if row is None or not self.allowlist.allows(row["github_login"]):
             return None
         self.store.touch_token(row["id"])
-        return row["github_login"], "token"
+        return Caller(row["github_login"], "token", row["id"], row["name"])
 
     # -- request ----------------------------------------------------------
 
     def caller(self, request: Request) -> Caller | None:
         header = request.headers.get("authorization", "")
         if header[:7].lower() == "bearer ":
-            hit = self.token_login(header[7:].strip())
-            return Caller(*hit) if hit else None
+            return self.token_login(header[7:].strip())
         cookie = request.cookies.get(SESSION_COOKIE)
         if cookie:
             login = self.session_login(cookie)

@@ -411,13 +411,15 @@ function renderChrome(signedIn) {
     chrome.replaceChildren(h("header", { class: "site-header" }, h("nav", { class: "page", "aria-label": "Main" }, brand)));
     return;
   }
-  const links = NAV.map(([href, label, key]) => h("a", { href, "data-nav": key }, label));
+  // An API token cannot manage tokens: no Tokens link for it.
+  const nav = NAV.filter(([, , key]) => key !== "tokens" || state.me?.via !== "token");
+  const links = nav.map(([href, label, key]) => h("a", { href, "data-nav": key }, label));
   const who = h("span", { class: "who" }, "Signed in as ", h("b", null, state.me?.login || "?"));
   const out = h("button", { class: "btn btn-secondary btn-sm", type: "button", onclick: signOut }, "Sign out");
 
   const toggle = h("button", { class: "menu-toggle", type: "button", "aria-label": "Open menu", "aria-expanded": "false", "aria-controls": "mobile-menu" },
     h("span", { "aria-hidden": "true" }), h("span", { "aria-hidden": "true" }));
-  const menuLinks = NAV.map(([href, label, key]) => h("a", { class: "big", href, "data-nav": key }, label));
+  const menuLinks = nav.map(([href, label, key]) => h("a", { class: "big", href, "data-nav": key }, label));
   const menu = h("div", { class: "mobile-menu", id: "mobile-menu", inert: true },
     h("div", { class: "page" }, menuLinks,
       h("span", { class: "who" }, "Signed in as ", h("b", null, state.me?.login || "?")),
@@ -457,6 +459,21 @@ function markNav(key) {
 // Jobs list
 // ---------------------------------------------------------------------------
 
+// The API token that sent a job: its name, or its id when the name is empty.
+function tokenLabel(job) {
+  if (!job.token_id) return null;
+  if (job.token_id === "bootstrap") return "bootstrap token";
+  return `token ${job.token_name || job.token_id}`;
+}
+
+// The person, and the API token when one sent the job. The token name is free
+// text: <bdi> keeps it from reordering the text around it; the id is on hover.
+function sender(job) {
+  const t = tokenLabel(job);
+  if (!t) return job.requested_by || "unknown";
+  return h("span", { title: job.token_id }, `${job.requested_by || "unknown"} · `, h("bdi", null, t));
+}
+
 function jobRow(job) {
   const total = rosterTotal(job.roster);
   const ok = job.outcomes?.success || 0;
@@ -467,7 +484,7 @@ function jobRow(job) {
     const refs = job.head_ref ? `${job.head_ref}${job.base_ref ? ` → ${job.base_ref}` : ""}` : (job.base_ref ? `into ${job.base_ref}` : null);
     if (refs) sub.push(h("span", { class: "sep", "aria-hidden": "true" }, "/"), refs);
   }
-  sub.push(h("span", { class: "sep", "aria-hidden": "true" }, "/"), job.requested_by || "unknown");
+  sub.push(h("span", { class: "sep", "aria-hidden": "true" }, "/"), sender(job));
   const dur = elapsed(job);
   const running = job.status === "running";
   return h("li", null,
@@ -830,6 +847,8 @@ function viewJob(main, id) {
     const add = (k, v) => { if (v != null && v !== "") rows.push(h("div", null, h("dt", null, k), h("dd", null, v))); };
     add("Job", h("span", { class: "mono" }, j.id));
     add("Requested by", `${j.requested_by || "unknown"}${j.source ? ` (via ${j.source})` : ""}`);
+    add("API token", j.token_id && j.token_id !== "bootstrap"
+      ? [h("bdi", null, j.token_name || ""), h("span", { class: "mono faint", dir: "ltr" }, ` ${j.token_id}`)] : tokenLabel(j));
     add("Reviewers", h("span", { class: "mono" }, j.roster));
     if (j.kind === "review") {
       add("Repository", j.repo);
@@ -905,7 +924,7 @@ function viewJob(main, id) {
     const subParts = [];
     subParts.push(headStatus);
     if (j.kind === "review" && (j.head_ref || j.base_ref)) subParts.push(h("span", { class: "muted" }, `${j.head_ref || "head"} → ${j.base_ref || "default branch"}`));
-    subParts.push(h("span", { class: "muted" }, `by ${j.requested_by || "unknown"}`));
+    subParts.push(h("span", { class: "muted" }, "by ", sender(j)));
 
     const promptText = (j.prompt || "").trim();
     const showPrompt = j.kind === "spar" ? promptText.length > title.length + 2 : !!promptText;

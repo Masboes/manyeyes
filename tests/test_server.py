@@ -479,3 +479,65 @@ def test_logins_in_usage_and_switch(server_settings, tmp_path):
         assert c.post("/api/logins/codex/spare", headers=H, json={}).status_code == 422
         audit = c.get("/api/audit", headers=H).json()
         assert any(a["action"] == "login_change" for a in audit)
+
+
+def test_job_records_the_api_token_that_sent_it(client):
+    tok = client.post("/api/tokens", headers=H, json={"name": "Jan"}).json()
+    th = {"Authorization": f"Bearer {tok['token']}"}
+    job = client.post("/api/jobs/spar", headers=th, json={"prompt": "q", "roster": "codex:1@ok"}).json()
+    assert (job["requested_by"], job["token_id"], job["token_name"]) == ("alice", tok["id"], "Jan")
+    # The name stays on the job after the token is revoked.
+    assert client.delete(f"/api/tokens/{tok['id']}", headers=H).status_code == 200
+    assert client.get(f"/api/jobs/{job['id']}", headers=H).json()["token_name"] == "Jan"
+    boot = client.post("/api/jobs/spar", headers=H, json={"prompt": "q", "roster": "codex:1@ok"}).json()
+    assert boot["token_name"] == "bootstrap token"
+
+
+def test_mcp_job_records_the_api_token(client, monkeypatch):
+    from fastmcp import Client
+    from fastmcp.server.auth import AccessToken
+
+    import manyeyes.server.mcp as mcp_mod
+
+    app = client.app
+    m = mcp_mod.create_mcp(app.state.worker.base, app.state.store, app.state.worker, app.state.auth)
+    check = mcp_mod.TokenCheck(app.state.auth, None)
+    tok = client.post("/api/tokens", headers=H, json={"name": "Jan"}).json()
+    oauth = AccessToken(token="x", client_id="c", scopes=[], expires_at=None,
+                        claims={"login": "alice", "via": "mcp-oauth", "token_id": "t-1"})
+
+    async def spar_as(at):
+        monkeypatch.setattr(mcp_mod, "get_access_token", lambda: at)
+        async with Client(m) as c:
+            r = await c.call_tool("swarm_spar", {"prompt": "q", "agents": "codex:1@ok"})
+            res = r.structured_content
+            ls = (await c.call_tool("swarm_ls", {"limit": 1})).structured_content
+        return res, (ls["result"] if isinstance(ls, dict) and "result" in ls else ls)[0]
+
+    cases = [(asyncio.run(check.verify_token(tok["token"])), (tok["id"], "Jan")),
+             (asyncio.run(check.verify_token(BOOT)), ("bootstrap", "bootstrap token")),
+             # An MCP sign-in (GitHub OAuth) has no token of ours, whatever its claims say.
+             (oauth, (None, None))]
+    for at, want in cases:
+        res, row = asyncio.run(spar_as(at))
+        assert res["status"] == "done" and "synthesis" in res
+        job = app.state.store.get_job(res["id"])
+        assert (job["requested_by"], job["token_id"], job["token_name"]) == ("alice", *want)
+        assert (row["token_id"], row["token_name"]) == want
+
+
+def test_blank_token_name_is_refused(client):
+    for bad in ("   ", "Jan\u202e", "a\nb", "\tJan\n"):
+        assert client.post("/api/tokens", headers=H, json={"name": bad}).status_code == 422
+    assert client.post("/api/tokens", headers=H, json={"name": " Jan "}).json()["name"] == "Jan"
+
+
+def test_an_api_token_cannot_manage_tokens(client):
+    tok = client.post("/api/tokens", headers=H, json={"name": "Jan"}).json()
+    th = {"Authorization": f"Bearer {tok['token']}"}
+    assert client.post("/api/tokens", headers=th, json={"name": "mine"}).status_code == 403
+    assert client.get("/api/tokens", headers=th).status_code == 403
+    assert client.delete(f"/api/tokens/{tok['id']}", headers=th).status_code == 403
+    # It still sends jobs.
+    assert client.post("/api/jobs/spar", headers=th,
+                       json={"prompt": "q", "roster": "codex:1@ok"}).status_code == 202

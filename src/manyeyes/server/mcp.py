@@ -52,12 +52,12 @@ class TokenCheck(TokenVerifier):
         self.auth = auth
 
     async def verify_token(self, token: str) -> AccessToken | None:
-        hit = self.auth.token_login(token)
-        if hit is None:
+        c = self.auth.token_login(token)
+        if c is None:
             return None
-        login, via = hit
-        return AccessToken(token=token, client_id=via, scopes=[], expires_at=None,
-                           claims={"login": login, "via": via})
+        return AccessToken(token=token, client_id=c.via, scopes=[], expires_at=None,
+                           claims={"login": c.login, "via": c.via, "token_id": c.token_id,
+                                   "token_name": c.token_name})
 
 
 def build_auth(settings: Settings, auth: Auth):
@@ -127,6 +127,15 @@ def build_auth(settings: Settings, auth: Auth):
 def _caller_login() -> str | None:
     at = get_access_token()
     return (at.claims or {}).get("login") if at is not None else None
+
+
+def _caller_token() -> dict[str, str | None]:
+    """The API token of the call (None for an MCP sign-in, which has no token of ours)."""
+    at = get_access_token()
+    claims = (at.claims or {}) if at is not None else {}
+    if claims.get("via") not in ("token", "bootstrap"):
+        return {"token_id": None, "token_name": None}
+    return {"token_id": claims.get("token_id"), "token_name": claims.get("token_name")}
 
 
 def _row(job: dict[str, Any]) -> dict[str, Any]:
@@ -204,7 +213,8 @@ def create_mcp(settings: Settings, store: Store, worker: Worker, auth: Auth) -> 
         try:
             job = limits.admit(effective_settings(settings, store), store, login,
                                fields["roster"], opts.get("mode", "full"),
-                               {**fields, "requested_by": login, "source": "mcp"})
+                               {**fields, "requested_by": login, "source": "mcp",
+                                **_caller_token()})
         except (limits.LimitHit, limits.NotSignedIn) as e:
             raise ValueError(str(e)) from e
         worker.notify()
