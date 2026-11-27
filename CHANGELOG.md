@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [1.7.1] — 2026-11-27
+
 ### Added
 - A job records the API token that sent it, through the API or MCP. The job list and the job page show the token name next to the login, for example `alice · token laptop`. So you can give a token to another person and see which jobs are theirs. The name stays on the job after you revoke the token. Jobs from a browser session, an MCP sign-in, GitHub or the CLI have no token. Older jobs have no token. Job rows of the API (`/api/jobs`) and of MCP (`swarm_ls`, `swarm_status`) have two new keys: `token_id` and `token_name`; tell tokens apart by `token_id`. Every signed-in user sees all jobs, so every user sees the token names too: do not put private information in a token name.
 
