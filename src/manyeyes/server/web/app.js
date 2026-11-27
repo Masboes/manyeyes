@@ -457,6 +457,11 @@ function markNav(key) {
 // Jobs list
 // ---------------------------------------------------------------------------
 
+// The person, and the API token when one sent the job.
+function sender(job) {
+  return `${job.requested_by || "unknown"}${job.token_name ? ` · token ${job.token_name}` : ""}`;
+}
+
 function jobRow(job) {
   const total = rosterTotal(job.roster);
   const ok = job.outcomes?.success || 0;
@@ -467,7 +472,7 @@ function jobRow(job) {
     const refs = job.head_ref ? `${job.head_ref}${job.base_ref ? ` → ${job.base_ref}` : ""}` : (job.base_ref ? `into ${job.base_ref}` : null);
     if (refs) sub.push(h("span", { class: "sep", "aria-hidden": "true" }, "/"), refs);
   }
-  sub.push(h("span", { class: "sep", "aria-hidden": "true" }, "/"), job.requested_by || "unknown");
+  sub.push(h("span", { class: "sep", "aria-hidden": "true" }, "/"), sender(job));
   const dur = elapsed(job);
   const running = job.status === "running";
   return h("li", null,
@@ -830,6 +835,7 @@ function viewJob(main, id) {
     const add = (k, v) => { if (v != null && v !== "") rows.push(h("div", null, h("dt", null, k), h("dd", null, v))); };
     add("Job", h("span", { class: "mono" }, j.id));
     add("Requested by", `${j.requested_by || "unknown"}${j.source ? ` (via ${j.source})` : ""}`);
+    add("API token", j.token_name);
     add("Reviewers", h("span", { class: "mono" }, j.roster));
     if (j.kind === "review") {
       add("Repository", j.repo);
@@ -905,7 +911,7 @@ function viewJob(main, id) {
     const subParts = [];
     subParts.push(headStatus);
     if (j.kind === "review" && (j.head_ref || j.base_ref)) subParts.push(h("span", { class: "muted" }, `${j.head_ref || "head"} → ${j.base_ref || "default branch"}`));
-    subParts.push(h("span", { class: "muted" }, `by ${j.requested_by || "unknown"}`));
+    subParts.push(h("span", { class: "muted" }, `by ${sender(j)}`));
 
     const promptText = (j.prompt || "").trim();
     const showPrompt = j.kind === "spar" ? promptText.length > title.length + 2 : !!promptText;

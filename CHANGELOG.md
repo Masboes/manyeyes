@@ -4,6 +4,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+- A job records the API token that sent it, through the API or MCP. The job list and the job page show the token name next to the login, for example `alice · token laptop`. So you can give a token to another person and see which jobs are theirs. The name stays on the job after you revoke the token. Jobs from a browser session, an MCP sign-in, GitHub or the CLI have no token. Older jobs have no token.
+
 ## [1.7.0] — 2026-11-26
 
 ### Added

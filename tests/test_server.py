@@ -479,3 +479,33 @@ def test_logins_in_usage_and_switch(server_settings, tmp_path):
         assert c.post("/api/logins/codex/spare", headers=H, json={}).status_code == 422
         audit = c.get("/api/audit", headers=H).json()
         assert any(a["action"] == "login_change" for a in audit)
+
+
+def test_job_records_the_api_token_that_sent_it(client):
+    tok = client.post("/api/tokens", headers=H, json={"name": "Jan"}).json()
+    th = {"Authorization": f"Bearer {tok['token']}"}
+    job = client.post("/api/jobs/spar", headers=th, json={"prompt": "q", "roster": "codex:1@ok"}).json()
+    assert (job["requested_by"], job["token_id"], job["token_name"]) == ("alice", tok["id"], "Jan")
+    # The name stays on the job after the token is revoked.
+    assert client.delete(f"/api/tokens/{tok['id']}", headers=H).status_code == 200
+    assert client.get(f"/api/jobs/{job['id']}", headers=H).json()["token_name"] == "Jan"
+    boot = client.post("/api/jobs/spar", headers=H, json={"prompt": "q", "roster": "codex:1@ok"}).json()
+    assert boot["token_name"] == "bootstrap token"
+
+
+def test_mcp_job_records_the_api_token(client, monkeypatch):
+    from fastmcp.server.auth import AccessToken
+
+    import manyeyes.server.mcp as mcp_mod
+
+    auth = client.app.state.auth
+    tok = client.post("/api/tokens", headers=H, json={"name": "Jan"}).json()
+    at = asyncio.run(mcp_mod.TokenCheck(auth, None).verify_token(tok["token"]))
+    monkeypatch.setattr(mcp_mod, "get_access_token", lambda: at)
+    assert mcp_mod._caller_login() == "alice"
+    assert mcp_mod._caller_token() == {"token_id": tok["id"], "token_name": "Jan"}
+    # An MCP sign-in (GitHub OAuth) has no token of ours, whatever its claims say.
+    oauth = AccessToken(token="x", client_id="c", scopes=[], expires_at=None,
+                        claims={"login": "alice", "via": "mcp-oauth", "token_id": "t-1"})
+    monkeypatch.setattr(mcp_mod, "get_access_token", lambda: oauth)
+    assert mcp_mod._caller_token() == {"token_id": None, "token_name": None}

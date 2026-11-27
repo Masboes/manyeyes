@@ -136,7 +136,7 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
             raise HTTPException(422, str(e)) from e
         roster = check_roster(body.roster, body.mode)
         job = admit(c, roster, body.mode, dict(
-            kind="review", requested_by=c.login, source="api",
+            kind="review", **c.job_fields(), source="api",
             repo=body.repo, pr=body.pr, head_ref=body.branch,
             base_ref=body.base, roster=roster, prompt=body.focus,
             options_json=json.dumps({"no_synth": body.no_synth, "mode": body.mode,
@@ -148,7 +148,7 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
     def submit_spar(body: SparIn, c: Caller = Depends(caller)) -> dict[str, Any]:
         roster = check_roster(body.roster, body.mode)
         job = admit(c, roster, body.mode, dict(
-            kind="spar", requested_by=c.login, source="api", prompt=body.prompt.strip(),
+            kind="spar", **c.job_fields(), source="api", prompt=body.prompt.strip(),
             roster=roster, options_json=json.dumps({"no_synth": body.no_synth, "mode": body.mode})))
         worker.notify()
         return job_view(job)

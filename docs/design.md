@@ -154,7 +154,7 @@ Tool names stay the same, so existing clients keep working: `swarm_review`, `swa
 |---|---|
 | Browser | GitHub OAuth. Session JWT in an httpOnly cookie, path = prefix. |
 | MCP client | MCP OAuth through GitHub (FastMCP `GitHubProvider`). The client adds only the URL; `claude mcp add --transport http <name> <url>` opens a GitHub sign-in. Behind a prefix it needs the RFC 9728 / 8414 `/.well-known/…` routes at the origin root; the nginx sample includes them. |
-| Scripts, CI, header-only clients | Personal API tokens. A logged-in user creates them in the web UI. Stored hashed, tied to a GitHub login. |
+| Scripts, CI, header-only clients | Personal API tokens. A logged-in user creates them in the web UI. Stored hashed, tied to a GitHub login. A job records the token that sent it. |
 | Bootstrap | Optional `MANYEYES_BOOTSTRAP_TOKEN` with `MANYEYES_BOOTSTRAP_LOGIN` (both required together). It acts as that GitHub login, which must be on the allowlist. Remove the variable and restart to revoke it. At cutover, the old shared token can be set here, so header-only clients keep working. |
 
 One GitHub OAuth App serves both the web UI and MCP. It registers two exact redirect URIs per prefix: `<public_url>/auth/callback` (web UI) and `<public_url>/mcp/auth/callback` (MCP). Wildcard matching stays off. "Expire user access tokens" stays off, because MCP re-verifies the GitHub token after sign-in.

@@ -26,7 +26,7 @@ JOB_COLUMNS = (
     "id", "kind", "status", "partial", "requested_by", "source", "repo", "pr", "head_ref",
     "base_ref", "head_sha", "base_sha", "prompt", "roster", "options_json", "created_at",
     "started_at",
-    "finished_at", "error", "outcomes_json", "synthesis_md", "result_md",
+    "finished_at", "error", "outcomes_json", "synthesis_md", "result_md", "token_id", "token_name",
 )
 
 
