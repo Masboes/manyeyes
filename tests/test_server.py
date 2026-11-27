@@ -527,5 +527,17 @@ def test_mcp_job_records_the_api_token(client, monkeypatch):
 
 
 def test_blank_token_name_is_refused(client):
-    assert client.post("/api/tokens", headers=H, json={"name": "   "}).status_code == 422
+    for bad in ("   ", "Jan\u202e", "a\nb"):
+        assert client.post("/api/tokens", headers=H, json={"name": bad}).status_code == 422
     assert client.post("/api/tokens", headers=H, json={"name": " Jan "}).json()["name"] == "Jan"
+
+
+def test_an_api_token_cannot_manage_tokens(client):
+    tok = client.post("/api/tokens", headers=H, json={"name": "Jan"}).json()
+    th = {"Authorization": f"Bearer {tok['token']}"}
+    assert client.post("/api/tokens", headers=th, json={"name": "mine"}).status_code == 403
+    assert client.get("/api/tokens", headers=th).status_code == 403
+    assert client.delete(f"/api/tokens/{tok['id']}", headers=th).status_code == 403
+    # It still sends jobs.
+    assert client.post("/api/jobs/spar", headers=th,
+                       json={"prompt": "q", "roster": "codex:1@ok"}).status_code == 202

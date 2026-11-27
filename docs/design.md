@@ -250,7 +250,7 @@ docs/                design, quickstart, self-hosting, configuration, architectu
 ```
 jobs            id, kind, status, partial, requested_by, repo, pr, head_ref, base_ref,
                 head_sha, base_sha, prompt, roster, created_at, started_at,
-                finished_at, error, synthesis_md, result_json
+                finished_at, error, synthesis_md, result_json, token_id, token_name
 reviewer_runs   id, job_id, reviewer, instance, model, effort, started_at,
                 finished_at, duration_s, input_tokens, cached_input_tokens,
                 output_tokens, reasoning_tokens, outcome, failure_reason,

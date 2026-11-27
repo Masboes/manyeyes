@@ -334,15 +334,23 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
 
     # -- tokens and audit -------------------------------------------------------
 
+    def no_token_caller(c: Caller) -> None:
+        # A token may be given to another person: it must not make or end tokens,
+        # or a token could outlive its own revocation.
+        if c.via == "token":
+            raise HTTPException(403, "manage tokens in the web UI, not with an API token")
+
     @api.get("/tokens")
     def list_tokens(c: Caller = Depends(caller)) -> list[dict[str, Any]]:
+        no_token_caller(c)
         return store.tokens_for(c.login)
 
     @api.post("/tokens", status_code=201)
     def create_token(body: TokenIn, c: Caller = Depends(caller)) -> dict[str, Any]:
+        no_token_caller(c)
         name = body.name.strip()
-        if not name:
-            raise HTTPException(422, "give the token a name")
+        if not name or not name.isprintable():
+            raise HTTPException(422, "give the token a name of printable characters")
         token = new_api_token()
         token_id = "t-" + secrets.token_hex(4)
         store.add_token(token_id, c.login, name, hash_token(token))
@@ -352,6 +360,7 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
 
     @api.delete("/tokens/{token_id}")
     def revoke_token(token_id: str, c: Caller = Depends(caller)) -> dict[str, Any]:
+        no_token_caller(c)
         if not store.revoke_token(token_id, c.login):
             raise HTTPException(404, "no such active token")
         store.audit(c.login, "token_revoke", {"id": token_id})

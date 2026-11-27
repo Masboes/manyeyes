@@ -5,10 +5,11 @@ All notable changes to this project are documented here. The format follows [Kee
 ## [Unreleased]
 
 ### Added
-- A job records the API token that sent it, through the API or MCP. The job list and the job page show the token name next to the login, for example `alice · token laptop`. So you can give a token to another person and see which jobs are theirs. The name stays on the job after you revoke the token. Jobs from a browser session, an MCP sign-in, GitHub or the CLI have no token. Older jobs have no token. Job responses of the API and MCP have two new keys: `token_id` and `token_name`. Every signed-in user sees all jobs, so every user sees the token names too: do not put private information in a token name.
+- A job records the API token that sent it, through the API or MCP. The job list and the job page show the token name next to the login, for example `alice · token laptop`. So you can give a token to another person and see which jobs are theirs. The name stays on the job after you revoke the token. Jobs from a browser session, an MCP sign-in, GitHub or the CLI have no token. Older jobs have no token. Job rows of the API (`/api/jobs`) and of MCP (`swarm_ls`, `swarm_status`) have two new keys: `token_id` and `token_name`; tell tokens apart by `token_id`. Every signed-in user sees all jobs, so every user sees the token names too: do not put private information in a token name.
 
 ### Changed
-- A token name that is only spaces is refused (HTTP 422).
+- An API token can no longer list, make or revoke tokens (HTTP 403): use the web UI. Before, a person with a token you gave them could make a new token for your login, and that token stayed valid after you revoked theirs. A token still acts as your login in every other way: it can start, cancel and delete your jobs, and change settings while `auth.admins` is empty.
+- A token name must have printable characters, and not only spaces (HTTP 422).
 
 ## [1.7.0] — 2026-11-26
 

@@ -464,10 +464,12 @@ function tokenLabel(job) {
   return `token ${job.token_name || job.token_id}`;
 }
 
-// The person, and the API token when one sent the job.
+// The person, and the API token when one sent the job. The token name is free
+// text: <bdi> keeps it from reordering the text around it; the id is on hover.
 function sender(job) {
   const t = tokenLabel(job);
-  return `${job.requested_by || "unknown"}${t ? ` · ${t}` : ""}`;
+  if (!t) return job.requested_by || "unknown";
+  return h("span", { title: job.token_id }, `${job.requested_by || "unknown"} · `, h("bdi", null, t));
 }
 
 function jobRow(job) {
@@ -844,7 +846,7 @@ function viewJob(main, id) {
     add("Job", h("span", { class: "mono" }, j.id));
     add("Requested by", `${j.requested_by || "unknown"}${j.source ? ` (via ${j.source})` : ""}`);
     add("API token", j.token_id && j.token_id !== "bootstrap"
-      ? [j.token_name || "", h("span", { class: "mono faint" }, ` ${j.token_id}`)] : tokenLabel(j));
+      ? [h("bdi", null, j.token_name || ""), h("span", { class: "mono faint", dir: "ltr" }, ` ${j.token_id}`)] : tokenLabel(j));
     add("Reviewers", h("span", { class: "mono" }, j.roster));
     if (j.kind === "review") {
       add("Repository", j.repo);
@@ -920,7 +922,7 @@ function viewJob(main, id) {
     const subParts = [];
     subParts.push(headStatus);
     if (j.kind === "review" && (j.head_ref || j.base_ref)) subParts.push(h("span", { class: "muted" }, `${j.head_ref || "head"} → ${j.base_ref || "default branch"}`));
-    subParts.push(h("span", { class: "muted" }, `by ${sender(j)}`));
+    subParts.push(h("span", { class: "muted" }, "by ", sender(j)));
 
     const promptText = (j.prompt || "").trim();
     const showPrompt = j.kind === "spar" ? promptText.length > title.length + 2 : !!promptText;
