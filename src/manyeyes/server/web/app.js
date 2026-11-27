@@ -457,9 +457,17 @@ function markNav(key) {
 // Jobs list
 // ---------------------------------------------------------------------------
 
+// The API token that sent a job: its name, or its id when the name is empty.
+function tokenLabel(job) {
+  if (!job.token_id) return null;
+  if (job.token_id === "bootstrap") return "bootstrap token";
+  return `token ${job.token_name || job.token_id}`;
+}
+
 // The person, and the API token when one sent the job.
 function sender(job) {
-  return `${job.requested_by || "unknown"}${job.token_name ? ` · token ${job.token_name}` : ""}`;
+  const t = tokenLabel(job);
+  return `${job.requested_by || "unknown"}${t ? ` · ${t}` : ""}`;
 }
 
 function jobRow(job) {
@@ -835,7 +843,8 @@ function viewJob(main, id) {
     const add = (k, v) => { if (v != null && v !== "") rows.push(h("div", null, h("dt", null, k), h("dd", null, v))); };
     add("Job", h("span", { class: "mono" }, j.id));
     add("Requested by", `${j.requested_by || "unknown"}${j.source ? ` (via ${j.source})` : ""}`);
-    add("API token", j.token_name);
+    add("API token", j.token_id && j.token_id !== "bootstrap"
+      ? [j.token_name || "", h("span", { class: "mono faint" }, ` ${j.token_id}`)] : tokenLabel(j));
     add("Reviewers", h("span", { class: "mono" }, j.roster));
     if (j.kind === "review") {
       add("Repository", j.repo);

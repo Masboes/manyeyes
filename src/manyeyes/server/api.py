@@ -340,11 +340,14 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
 
     @api.post("/tokens", status_code=201)
     def create_token(body: TokenIn, c: Caller = Depends(caller)) -> dict[str, Any]:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(422, "give the token a name")
         token = new_api_token()
         token_id = "t-" + secrets.token_hex(4)
-        store.add_token(token_id, c.login, body.name.strip(), hash_token(token))
-        store.audit(c.login, "token_create", {"id": token_id, "name": body.name})
-        return {"id": token_id, "name": body.name, "token": token,
+        store.add_token(token_id, c.login, name, hash_token(token))
+        store.audit(c.login, "token_create", {"id": token_id, "name": name})
+        return {"id": token_id, "name": name, "token": token,
                 "note": "Shown once. Store it now."}
 
     @api.delete("/tokens/{token_id}")

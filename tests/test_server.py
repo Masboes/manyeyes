@@ -494,18 +494,38 @@ def test_job_records_the_api_token_that_sent_it(client):
 
 
 def test_mcp_job_records_the_api_token(client, monkeypatch):
+    from fastmcp import Client
     from fastmcp.server.auth import AccessToken
 
     import manyeyes.server.mcp as mcp_mod
 
-    auth = client.app.state.auth
+    app = client.app
+    m = mcp_mod.create_mcp(app.state.worker.base, app.state.store, app.state.worker, app.state.auth)
+    check = mcp_mod.TokenCheck(app.state.auth, None)
     tok = client.post("/api/tokens", headers=H, json={"name": "Jan"}).json()
-    at = asyncio.run(mcp_mod.TokenCheck(auth, None).verify_token(tok["token"]))
-    monkeypatch.setattr(mcp_mod, "get_access_token", lambda: at)
-    assert mcp_mod._caller_login() == "alice"
-    assert mcp_mod._caller_token() == {"token_id": tok["id"], "token_name": "Jan"}
-    # An MCP sign-in (GitHub OAuth) has no token of ours, whatever its claims say.
     oauth = AccessToken(token="x", client_id="c", scopes=[], expires_at=None,
                         claims={"login": "alice", "via": "mcp-oauth", "token_id": "t-1"})
-    monkeypatch.setattr(mcp_mod, "get_access_token", lambda: oauth)
-    assert mcp_mod._caller_token() == {"token_id": None, "token_name": None}
+
+    async def spar_as(at):
+        monkeypatch.setattr(mcp_mod, "get_access_token", lambda: at)
+        async with Client(m) as c:
+            r = await c.call_tool("swarm_spar", {"prompt": "q", "agents": "codex:1@ok"})
+            res = r.structured_content
+            ls = (await c.call_tool("swarm_ls", {"limit": 1})).structured_content
+        return res, (ls["result"] if isinstance(ls, dict) and "result" in ls else ls)[0]
+
+    cases = [(asyncio.run(check.verify_token(tok["token"])), (tok["id"], "Jan")),
+             (asyncio.run(check.verify_token(BOOT)), ("bootstrap", "bootstrap token")),
+             # An MCP sign-in (GitHub OAuth) has no token of ours, whatever its claims say.
+             (oauth, (None, None))]
+    for at, want in cases:
+        res, row = asyncio.run(spar_as(at))
+        assert res["status"] == "done" and "synthesis" in res
+        job = app.state.store.get_job(res["id"])
+        assert (job["requested_by"], job["token_id"], job["token_name"]) == ("alice", *want)
+        assert (row["token_id"], row["token_name"]) == want
+
+
+def test_blank_token_name_is_refused(client):
+    assert client.post("/api/tokens", headers=H, json={"name": "   "}).status_code == 422
+    assert client.post("/api/tokens", headers=H, json={"name": " Jan "}).json()["name"] == "Jan"
