@@ -411,13 +411,15 @@ function renderChrome(signedIn) {
     chrome.replaceChildren(h("header", { class: "site-header" }, h("nav", { class: "page", "aria-label": "Main" }, brand)));
     return;
   }
-  const links = NAV.map(([href, label, key]) => h("a", { href, "data-nav": key }, label));
+  // An API token cannot manage tokens: no Tokens link for it.
+  const nav = NAV.filter(([, , key]) => key !== "tokens" || state.me?.via !== "token");
+  const links = nav.map(([href, label, key]) => h("a", { href, "data-nav": key }, label));
   const who = h("span", { class: "who" }, "Signed in as ", h("b", null, state.me?.login || "?"));
   const out = h("button", { class: "btn btn-secondary btn-sm", type: "button", onclick: signOut }, "Sign out");
 
   const toggle = h("button", { class: "menu-toggle", type: "button", "aria-label": "Open menu", "aria-expanded": "false", "aria-controls": "mobile-menu" },
     h("span", { "aria-hidden": "true" }), h("span", { "aria-hidden": "true" }));
-  const menuLinks = NAV.map(([href, label, key]) => h("a", { class: "big", href, "data-nav": key }, label));
+  const menuLinks = nav.map(([href, label, key]) => h("a", { class: "big", href, "data-nav": key }, label));
   const menu = h("div", { class: "mobile-menu", id: "mobile-menu", inert: true },
     h("div", { class: "page" }, menuLinks,
       h("span", { class: "who" }, "Signed in as ", h("b", null, state.me?.login || "?")),

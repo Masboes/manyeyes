@@ -527,7 +527,7 @@ def test_mcp_job_records_the_api_token(client, monkeypatch):
 
 
 def test_blank_token_name_is_refused(client):
-    for bad in ("   ", "Jan\u202e", "a\nb"):
+    for bad in ("   ", "Jan\u202e", "a\nb", "\tJan\n"):
         assert client.post("/api/tokens", headers=H, json={"name": bad}).status_code == 422
     assert client.post("/api/tokens", headers=H, json={"name": " Jan "}).json()["name"] == "Jan"
 

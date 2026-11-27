@@ -349,7 +349,7 @@ def create_router(settings: Settings, store: Store, worker: Worker, auth: Auth) 
     def create_token(body: TokenIn, c: Caller = Depends(caller)) -> dict[str, Any]:
         no_token_caller(c)
         name = body.name.strip()
-        if not name or not name.isprintable():
+        if not name or not body.name.isprintable():
             raise HTTPException(422, "give the token a name of printable characters")
         token = new_api_token()
         token_id = "t-" + secrets.token_hex(4)
